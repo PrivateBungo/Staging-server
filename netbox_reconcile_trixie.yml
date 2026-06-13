@@ -37,54 +37,76 @@
   tasks:
     # ========================================================================
     # FETCH DATA FROM NETBOX USING OFFICIAL COLLECTION
+    # Note: Using ansible.builtin.uri instead of info modules which don't exist
+    # If NetBox is not available, we'll use empty defaults and skip reconciliation
     # ========================================================================
     
     - name: Get device information from NetBox
-      netbox.netbox.netbox_device_info:
-        api_endpoint: "http://10.100.66.48:8000"
-        token: "{{ lookup('env', 'NETBOX_TOKEN') | default('RUmeVgksKcgogMd7tn5TrkIphBEGrQEUKibOmayQ', true) }}"
-        name: "{{ device_name }}"
+      ansible.builtin.uri:
+        url: "http://10.100.66.48:8000/api/dcim/devices/?name={{ device_name }}"
+        method: GET
+        headers:
+          Authorization: "Token {{ lookup('env', 'NETBOX_TOKEN') | default('RUmeVgksKcgogMd7tn5TrkIphBEGrQEUKibOmayQ', true) }}"
+          Accept: "application/json"
+        validate_certs: no
+        return_content: yes
       register: nb_device
       changed_when: false
+      ignore_errors: yes
       
     - name: Display device info
       ansible.builtin.debug:
-        var: nb_device.netbox_devices
-      when: nb_device.netbox_devices | length > 0
+        var: nb_device.json.results
+      when: nb_device.json.results is defined and nb_device.json.results | length > 0
       
     - name: Get all interfaces for the device
-      netbox.netbox.netbox_interface_info:
-        api_endpoint: "http://10.100.66.48:8000"
-        token: "{{ lookup('env', 'NETBOX_TOKEN') | default('RUmeVgksKcgogMd7tn5TrkIphBEGrQEUKibOmayQ', true) }}"
-        device: "{{ device_name }}"
+      ansible.builtin.uri:
+        url: "http://10.100.66.48:8000/api/dcim/interfaces/?device={{ device_name }}"
+        method: GET
+        headers:
+          Authorization: "Token {{ lookup('env', 'NETBOX_TOKEN') | default('RUmeVgksKcgogMd7tn5TrkIphBEGrQEUKibOmayQ', true) }}"
+          Accept: "application/json"
+        validate_certs: no
+        return_content: yes
       register: nb_interfaces
       changed_when: false
+      ignore_errors: yes
+      when: nb_device.status == 200
       
     - name: Find trunk interface
       ansible.builtin.set_fact:
-        trunk_if: "{{ (nb_interfaces.netbox_interfaces | selectattr('name', 'equalto', trunk_interface) | first) if nb_interfaces.netbox_interfaces else {} }}"
+        trunk_if: "{{ (nb_interfaces.json.results | selectattr('name', 'equalto', trunk_interface) | first) if nb_interfaces.json.results is defined and nb_interfaces.json.results else {} }}"
       
     - name: Get child interfaces (VLAN sub-interfaces) of trunk
-      netbox.netbox.netbox_interface_info:
-        api_endpoint: "http://10.100.66.48:8000"
-        token: "{{ lookup('env', 'NETBOX_TOKEN') | default('RUmeVgksKcgogMd7tn5TrkIphBEGrQEUKibOmayQ', true) }}"
-        device: "{{ device_name }}"
-        parent_id: "{{ trunk_if.id }}"
+      ansible.builtin.uri:
+        url: "http://10.100.66.48:8000/api/dcim/interfaces/?parent_id={{ trunk_if.id }}"
+        method: GET
+        headers:
+          Authorization: "Token {{ lookup('env', 'NETBOX_TOKEN') | default('RUmeVgksKcgogMd7tn5TrkIphBEGrQEUKibOmayQ', true) }}"
+          Accept: "application/json"
+        validate_certs: no
+        return_content: yes
       register: nb_child_interfaces
       changed_when: false
+      ignore_errors: yes
       when: trunk_if.id is defined
       
     - name: Get IP addresses for child interfaces
-      netbox.netbox.netbox_ip_address_info:
-        api_endpoint: "http://10.100.66.48:8000"
-        token: "{{ lookup('env', 'NETBOX_TOKEN') | default('RUmeVgksKcgogMd7tn5TrkIphBEGrQEUKibOmayQ', true) }}"
-        interface_id: "{{ item.id }}"
+      ansible.builtin.uri:
+        url: "http://10.100.66.48:8000/api/ipam/ip-addresses/?interface_id={{ item.id }}"
+        method: GET
+        headers:
+          Authorization: "Token {{ lookup('env', 'NETBOX_TOKEN') | default('RUmeVgksKcgogMd7tn5TrkIphBEGrQEUKibOmayQ', true) }}"
+          Accept: "application/json"
+        validate_certs: no
+        return_content: yes
       register: nb_ip_addresses
-      loop: "{{ nb_child_interfaces.netbox_interfaces | default([]) }}"
+      loop: "{{ nb_child_interfaces.json.results | default([]) }}"
       loop_control:
         label: "Fetching IPs for interface {{ item.name }}"
       changed_when: false
-      when: nb_child_interfaces.netbox_interfaces is defined and nb_child_interfaces.netbox_interfaces | length > 0
+      ignore_errors: yes
+      when: nb_child_interfaces.json.results is defined and nb_child_interfaces.json.results | length > 0
     
     # ========================================================================
     # EXTRACT AND PROCESS DATA
@@ -92,13 +114,13 @@
     
     - name: Set device fact
       ansible.builtin.set_fact:
-        device: "{{ (nb_device.netbox_devices | first) if nb_device.netbox_devices else {} }}"
+        device: "{{ (nb_device.json.results | first) if nb_device.json.results else {} }}"
       
     - name: Extract VLAN IDs from child interfaces
       ansible.builtin.set_fact:
         nb_vlan_ids: >-
           {% set all_vlans = [] %}
-          {% for iface in nb_child_interfaces.netbox_interfaces | default([]) %}
+          {% for iface in nb_child_interfaces.json.results | default([]) %}
           {% set tagged_vlans = iface.tagged_vlans | default([]) %}
           {% for vlan in tagged_vlans %}
           {% set _ = all_vlans.append(vlan.vid) %}
@@ -111,9 +133,9 @@
         nb_ip_data: >-
           {% set all_ips = [] %}
           {% for result in nb_ip_addresses.results | default([]) %}
-          {% set child_iface = nb_child_interfaces.netbox_interfaces[loop.index0] %}
+          {% set child_iface = nb_child_interfaces.json.results[loop.index0] %}
           {% set vlan_ids = (child_iface.tagged_vlans | map(attribute='vid') | list) if child_iface.tagged_vlans else [] %}
-          {% for ip in result.netbox_ip_addresses | default([]) %}
+          {% for ip in result.json.results | default([]) %}
           {% set services = (ip.custom_fields | dict2items | selectattr('key', 'equalto', 'service_port') | first).value if ip.custom_fields and 'service_port' in ip.custom_fields else '' %}
           {% set _ = all_ips.append({
             'interface': child_iface.name,
