@@ -25,8 +25,9 @@
   hosts: localhost
   connection: local
   vars:
-    netbox_url: "http://10.100.66.48:8000"
-    netbox_token: "RUmeVgksKcgogMd7tn5TrkIphBEGrQEUKibOmayQ"
+    # NetBox configuration - supports environment variables
+    netbox_url: "{{ lookup('env', 'NETBOX_URL') | default('http://10.100.66.48:8000', true) }}"
+    netbox_token: "{{ lookup('env', 'NETBOX_TOKEN') | default('RUmeVgksKcgogMd7tn5TrkIphBEGrQEUKibOmayQ', true) }}"
     device_id: 1
     trunk_interface: "enp1s0"
     test_mode: false  # Set to true to run in test mode without making changes

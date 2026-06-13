@@ -5,11 +5,14 @@
   gather_facts: false
   
   vars:
-    netbox_url: "http://10.100.66.48:8000"
-    netbox_token: "RUmeVgksKcgogMd7tn5TrkIphBEGrQEUKibOmayQ"
+    # NetBox configuration - supports environment variables
+    netbox_url: "{{ lookup('env', 'NETBOX_URL') | default('http://10.100.66.48:8000', true) }}"
+    netbox_token: "{{ lookup('env', 'NETBOX_TOKEN') | default('RUmeVgksKcgogMd7tn5TrkIphBEGrQEUKibOmayQ', true) }}"
     device_name: "staging-server"
     trunk_interface: "enp1s0"
-    persistence_dir: "/etc/netbox_reconcile"
+    # Use ~/.netbox_reconcile for user-level persistence (no sudo needed)
+    # Can be overridden with PERSISTENCE_DIR environment variable
+    persistence_dir: "{{ lookup('env', 'PERSISTENCE_DIR') | default(lookup('env', 'HOME') + '/.netbox_reconcile', true) }}"
     tcp_sim_config: "{{ persistence_dir }}/tcp_services.json"
     network_config: "{{ persistence_dir }}/network-config.sh"
     
