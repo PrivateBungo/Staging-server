@@ -1,0 +1,10 @@
+{
+  "services": [
+    {% for service in services %}
+    {
+      "ip": "{{ service.ip }}",
+      "port": {{ service.port }}
+    }{% if not loop.last %},{% endif %}
+    {% endfor %}
+  ]
+}
