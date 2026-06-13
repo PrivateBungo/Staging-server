@@ -1,0 +1,54 @@
+---
+# NetBox Dynamic Inventory for Ansible 2.19.4+
+# Uses the official netbox.netbox collection
+#
+# Usage:
+#   ansible -i inventory.yml all --list-hosts
+#   ansible -i inventory.yml all -m ping
+#   ansible-playbook -i inventory.yml playbook.yml
+#
+# Prerequisites:
+#   - Ansible >= 2.15 (you have 2.19.4 ✅)
+#   - netbox.netbox collection installed
+#   - pynetbox Python library installed
+#
+# Install dependencies:
+#   ansible-galaxy collection install netbox.netbox
+#   sudo apt install -y python3-pynetbox
+
+plugin: netbox.netbox.netbox
+
+# NetBox API configuration
+api_url: "http://10.100.66.48:8000"
+token: "{{ lookup('env', 'NETBOX_TOKEN') | default('RUmeVgksKcgogMd7tn5TrkIphBEGrQEUKibOmayQ', true) }}"
+
+# SSL/TLS verification (disable for development with self-signed certs)
+validate_certs: false
+
+# Optional: Query parameters for filtering devices
+# query_params:
+#   device_role: "server"
+#   status: "active"
+
+# Group configuration - creates Ansible groups based on NetBox data
+groups:
+  device_roles: "device_role.slug"
+  sites: "site.slug"
+  device_types: "device_type.slug"
+
+# Host variables to include from NetBox
+# Accessible via hostvars[inventory_hostname][variable_name]
+compose:
+  netbox_id: "id"
+  netbox_name: "name"
+  netbox_display_name: "display"
+  netbox_description: "description"
+  netbox_status: "status.label"
+  netbox_device_type: "device_type.model"
+  netbox_device_role: "device_role.name"
+  netbox_device_role_slug: "device_role.slug"
+  netbox_site: "site.name"
+  netbox_site_slug: "site.slug"
+  netbox_primary_ip: "primary_ip.address"
+  netbox_primary_ip_id: "primary_ip.id"
+  netbox_custom_fields: "custom_fields"
