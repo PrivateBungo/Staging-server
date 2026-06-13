@@ -41,13 +41,16 @@
           Accept: "application/json"
         validate_certs: no
         return_content: yes
+        status_code: 200
       register: device_interfaces
       changed_when: false
+      failed_when: device_interfaces.status != 200
 
     # Extract trunk interface
     - name: Find trunk interface
       ansible.builtin.set_fact:
         trunk_if: "{{ (device_interfaces.json.results | selectattr('name', 'equalto', trunk_interface) | first) if device_interfaces.json.results else {} }}"
+      failed_when: trunk_if == {}
 
     # Fetch all child interfaces of the trunk interface
     - name: Get child interfaces of trunk
@@ -59,9 +62,11 @@
           Accept: "application/json"
         validate_certs: no
         return_content: yes
+        status_code: 200
       register: child_interfaces
       changed_when: false
       when: trunk_if.id is defined
+      failed_when: child_interfaces.status != 200
 
     # Fetch IPs for each child interface
     - name: Get IP addresses for child interfaces
@@ -73,12 +78,14 @@
           Accept: "application/json"
         validate_certs: no
         return_content: yes
+        status_code: 200
       register: ip_results
       loop: "{{ child_interfaces.json.results | default([]) }}"
       loop_control:
         label: "Fetching IPs for interface {{ item.name }}"
       changed_when: false
       when: child_interfaces.json.results is defined and child_interfaces.json.results|length > 0
+      failed_when: ip_results.status != 200
 
     # Build list of IPs with their VLAN IDs for assignment
     - name: Build IP to VLAN mapping
@@ -98,21 +105,46 @@
             'address': address,
             'prefix_length': prefix_length,
             'vlan_id': vlan_id,
-            'child_name': child.name
+            'child_name': child.name,
+            'interface_name': trunk_interface ~ '.' ~ vlan_id
           }) %}
           {% endfor %}
           {% endfor %}
           {{ mappings | unique(attribute='address') }}
       when: ip_results.results is defined and ip_results.results|length > 0
 
+    # Remove any existing IPs that are not in our mapping
+    - name: Remove IPs not in NetBox
+      ansible.builtin.shell: |
+        current_ips=$(ip -o addr show | awk '{print $4}' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+$')
+        for ip in $current_ips; do
+          if ! echo "{{ ip_vlan_mappings | map(attribute='address') | join('/') }}" | grep -q "${ip%%/*}"; then
+            ip addr del $ip dev $(ip -o addr show | grep $ip | awk '{print $2}') || true
+          fi
+        done
+      when: ip_vlan_mappings is defined and ip_vlan_mappings|length > 0
+      changed_when: false
+
     # Assign IPs to VLAN interfaces
     - name: Assign IP to VLAN interface
       ansible.builtin.shell: |
-        ip addr show {{ trunk_interface }}.{{ item.vlan_id }} | grep -q "{{ item.address }}" || \
-        ip addr add {{ item.address }}/{{ item.prefix_length }} dev {{ trunk_interface }}.{{ item.vlan_id }}
+        ip addr show {{ item.interface_name }} | grep -q "{{ item.address }}" || \
+        ip addr add {{ item.address }}/{{ item.prefix_length }} dev {{ item.interface_name }}
       loop: "{{ ip_vlan_mappings | default([]) }}"
       loop_control:
-        label: "{{ item.address }}/{{ item.prefix_length }} → {{ trunk_interface }}.{{ item.vlan_id }}"
+        label: "{{ item.address }}/{{ item.prefix_length }} → {{ item.interface_name }}"
       when: ip_vlan_mappings is defined and ip_vlan_mappings|length > 0
       register: ip_assignment_result
       changed_when: ip_assignment_result.rc == 0
+
+    # Validate IP assignments
+    - name: Validate IP assignments
+      ansible.builtin.shell: |
+        ip addr show {{ item.interface_name }} | grep -q "{{ item.address }}"
+      loop: "{{ ip_vlan_mappings | default([]) }}"
+      loop_control:
+        label: "Validating {{ item.address }} on {{ item.interface_name }}"
+      register: validation_result
+      changed_when: false
+      when: ip_vlan_mappings is defined and ip_vlan_mappings|length > 0
+      failed_when: validation_result.rc != 0
