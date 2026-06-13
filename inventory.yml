@@ -16,11 +16,11 @@
 #   ansible-galaxy collection install netbox.netbox
 #   sudo apt install -y python3-pynetbox
 
-# CORRECT PLUGIN NAME for netbox.netbox collection
-plugin: netbox
+# CORRECT PLUGIN NAME: netbox.netbox.nb_inventory
+plugin: netbox.netbox.nb_inventory
 
 # NetBox API configuration
-api_url: "http://10.100.66.48:8000"
+api_endpoint: "http://10.100.66.48:8000"
 token: "{{ lookup('env', 'NETBOX_TOKEN') | default('RUmeVgksKcgogMd7tn5TrkIphBEGrQEUKibOmayQ', true) }}"
 
 # SSL/TLS verification (disable for development with self-signed certs)
