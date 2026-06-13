@@ -1,0 +1,118 @@
+---
+# Agent Task: Assign IPs from NetBox to VLAN interfaces
+# Goal:
+#   Update the Ansible playbook to dynamically fetch IPs and VLAN interfaces for device ID 1 from NetBox,
+#   and assign the IPs to the corresponding VLAN interfaces on the local host.
+#
+# Constraints:
+#   - Use non-persistent IP assignment (ip addr add).
+#   - Use Ansible only.
+#   - Assume VLAN interfaces (e.g., enp1s0.2008) already exist.
+#   - Dynamically map child interfaces from NetBox to VLAN interfaces on the host.
+#
+# Validation:
+#   After running the playbook, verify with:
+#     ip addr show enp1s0.2008 | grep "10.2.223.10"
+#     ip addr show enp1s0.2000 | grep "10.2.223.2"
+#     ping 10.2.223.10
+#     ping 10.2.223.2
+#
+# Notes:
+#   - Do NOT include TCP simulation, persistence, or logging.
+#   - Ensure the playbook is idempotent and handles missing or duplicate IPs gracefully.
+
+- name: Assign IPs from NetBox to VLAN interfaces
+  hosts: localhost
+  connection: local
+  vars:
+    netbox_url: "http://10.100.66.48:8000"
+    netbox_token: "RUmeVgksKcgogMd7tn5TrkIphBEGrQEUKibOmayQ"
+    device_id: 1
+    trunk_interface: "enp1s0"
+
+  tasks:
+    # Fetch all interfaces for the device from NetBox
+    - name: Get all interfaces for device
+      ansible.builtin.uri:
+        url: "{{ netbox_url }}/api/dcim/interfaces/?device_id={{ device_id }}"
+        method: GET
+        headers:
+          Authorization: "Token {{ netbox_token }}"
+          Accept: "application/json"
+        validate_certs: no
+        return_content: yes
+      register: device_interfaces
+      changed_when: false
+
+    # Extract trunk interface
+    - name: Find trunk interface
+      ansible.builtin.set_fact:
+        trunk_if: "{{ (device_interfaces.json.results | selectattr('name', 'equalto', trunk_interface) | first) if device_interfaces.json.results else {} }}"
+
+    # Fetch all child interfaces of the trunk interface
+    - name: Get child interfaces of trunk
+      ansible.builtin.uri:
+        url: "{{ netbox_url }}/api/dcim/interfaces/?parent_id={{ trunk_if.id }}"
+        method: GET
+        headers:
+          Authorization: "Token {{ netbox_token }}"
+          Accept: "application/json"
+        validate_certs: no
+        return_content: yes
+      register: child_interfaces
+      changed_when: false
+      when: trunk_if.id is defined
+
+    # Fetch IPs for each child interface
+    - name: Get IP addresses for child interfaces
+      ansible.builtin.uri:
+        url: "{{ netbox_url }}/api/ipam/ip-addresses/?interface_id={{ item.id }}"
+        method: GET
+        headers:
+          Authorization: "Token {{ netbox_token }}"
+          Accept: "application/json"
+        validate_certs: no
+        return_content: yes
+      register: ip_results
+      loop: "{{ child_interfaces.json.results | default([]) }}"
+      loop_control:
+        label: "Fetching IPs for interface {{ item.name }}"
+      changed_when: false
+      when: child_interfaces.json.results is defined and child_interfaces.json.results|length > 0
+
+    # Build list of IPs with their VLAN IDs for assignment
+    - name: Build IP to VLAN mapping
+      ansible.builtin.set_fact:
+        ip_vlan_mappings: >-
+          {% set mappings = [] %}
+          {% for result in ip_results.results %}
+          {% set child = child_interfaces.json.results[loop.index0] %}
+          {% set tagged_vlans = child.tagged_vlans | default([]) %}
+          {% set vlan_id = tagged_vlans[0].vid if tagged_vlans|length > 0 else child.id %}
+          {% for ip in result.json.results | default([]) %}
+          {% set addr = ip.address | default('') %}
+          {% set addr_parts = addr.split('/') %}
+          {% set address = addr_parts[0] %}
+          {% set prefix_length = addr_parts[1] | default(24) | int %}
+          {% set _ = mappings.append({
+            'address': address,
+            'prefix_length': prefix_length,
+            'vlan_id': vlan_id,
+            'child_name': child.name
+          }) %}
+          {% endfor %}
+          {% endfor %}
+          {{ mappings | unique(attribute='address') }}
+      when: ip_results.results is defined and ip_results.results|length > 0
+
+    # Assign IPs to VLAN interfaces
+    - name: Assign IP to VLAN interface
+      ansible.builtin.shell: |
+        ip addr show {{ trunk_interface }}.{{ item.vlan_id }} | grep -q "{{ item.address }}" || \
+        ip addr add {{ item.address }}/{{ item.prefix_length }} dev {{ trunk_interface }}.{{ item.vlan_id }}
+      loop: "{{ ip_vlan_mappings | default([]) }}"
+      loop_control:
+        label: "{{ item.address }}/{{ item.prefix_length }} → {{ trunk_interface }}.{{ item.vlan_id }}"
+      when: ip_vlan_mappings is defined and ip_vlan_mappings|length > 0
+      register: ip_assignment_result
+      changed_when: ip_assignment_result.rc == 0
