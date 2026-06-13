@@ -41,8 +41,8 @@
     
     - name: Get device information from NetBox
       netbox.netbox.netbox_device_info:
-        api_url: "http://10.100.66.48:8000"
-        token: "{{ lookup('env', 'NETBOX_TOKEN') | default('RUmeVgksKcgogMd7tn5TrkIphBEGrQEUKibOmayQ', true) }}"
+        netbox_url: "http://10.100.66.48:8000"
+        netbox_token: "{{ lookup('env', 'NETBOX_TOKEN') | default('RUmeVgksKcgogMd7tn5TrkIphBEGrQEUKibOmayQ', true) }}"
         name: "{{ device_name }}"
       register: nb_device
       changed_when: false
@@ -54,8 +54,8 @@
       
     - name: Get all interfaces for the device
       netbox.netbox.netbox_interface_info:
-        api_url: "http://10.100.66.48:8000"
-        token: "{{ lookup('env', 'NETBOX_TOKEN') | default('RUmeVgksKcgogMd7tn5TrkIphBEGrQEUKibOmayQ', true) }}"
+        netbox_url: "http://10.100.66.48:8000"
+        netbox_token: "{{ lookup('env', 'NETBOX_TOKEN') | default('RUmeVgksKcgogMd7tn5TrkIphBEGrQEUKibOmayQ', true) }}"
         device: "{{ device_name }}"
       register: nb_interfaces
       changed_when: false
@@ -66,8 +66,8 @@
       
     - name: Get child interfaces (VLAN sub-interfaces) of trunk
       netbox.netbox.netbox_interface_info:
-        api_url: "http://10.100.66.48:8000"
-        token: "{{ lookup('env', 'NETBOX_TOKEN') | default('RUmeVgksKcgogMd7tn5TrkIphBEGrQEUKibOmayQ', true) }}"
+        netbox_url: "http://10.100.66.48:8000"
+        netbox_token: "{{ lookup('env', 'NETBOX_TOKEN') | default('RUmeVgksKcgogMd7tn5TrkIphBEGrQEUKibOmayQ', true) }}"
         device: "{{ device_name }}"
         parent_id: "{{ trunk_if.id }}"
       register: nb_child_interfaces
@@ -76,8 +76,8 @@
       
     - name: Get IP addresses for child interfaces
       netbox.netbox.netbox_ip_address_info:
-        api_url: "http://10.100.66.48:8000"
-        token: "{{ lookup('env', 'NETBOX_TOKEN') | default('RUmeVgksKcgogMd7tn5TrkIphBEGrQEUKibOmayQ', true) }}"
+        netbox_url: "http://10.100.66.48:8000"
+        netbox_token: "{{ lookup('env', 'NETBOX_TOKEN') | default('RUmeVgksKcgogMd7tn5TrkIphBEGrQEUKibOmayQ', true) }}"
         interface_id: "{{ item.id }}"
       register: nb_ip_addresses
       loop: "{{ nb_child_interfaces.netbox_interfaces | default([]) }}"
