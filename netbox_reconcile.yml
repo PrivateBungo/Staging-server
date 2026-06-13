@@ -1,0 +1,313 @@
+---
+- name: Full NetBox reconciliation - VLANs, IPs, and TCP services
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  
+  vars:
+    netbox_url: "http://10.100.66.48:8000"
+    netbox_token: "RUmeVgksKcgogMd7tn5TrkIphBEGrQEUKibOmayQ"
+    device_name: "staging-server"
+    trunk_interface: "enp1s0"
+    persistence_dir: "/etc/netbox_reconcile"
+    tcp_sim_config: "{{ persistence_dir }}/tcp_services.json"
+    network_config: "{{ persistence_dir }}/network-config.sh"
+    
+  tasks:
+    # ===== Ensure persistence directory exists =====
+    - name: Create persistence directory
+      ansible.builtin.file:
+        path: "{{ persistence_dir }}"
+        state: directory
+        mode: '0755'
+      
+    # ===== Fetch from NetBox =====
+    
+    - name: Get device information from NetBox
+      ansible.builtin.uri:
+        url: "{{ netbox_url }}/api/dcim/devices/?name={{ device_name }}"
+        method: GET
+        headers:
+          Authorization: "Token {{ netbox_token }}"
+          Accept: "application/json"
+        return_content: yes
+      register: device_result
+      changed_when: false
+      
+    - name: Set device fact
+      ansible.builtin.set_fact:
+        device: "{{ (device_result.json.results | first) if device_result.json.results else {} }}"
+      
+    - name: Get interfaces for the device
+      ansible.builtin.uri:
+        url: "{{ netbox_url }}/api/dcim/interfaces/?device_id={{ device.id }}"
+        method: GET
+        headers:
+          Authorization: "Token {{ netbox_token }}"
+          Accept: "application/json"
+        return_content: yes
+      register: interface_result
+      changed_when: false
+      
+    - name: Find trunk interface (parent)
+      ansible.builtin.set_fact:
+        trunk_if: "{{ (interface_result.json.results | selectattr('name', 'equalto', trunk_interface) | first) if interface_result.json.results else {} }}"
+      
+    - name: Get child interfaces of trunk interface
+      ansible.builtin.uri:
+        url: "{{ netbox_url }}/api/dcim/interfaces/?parent_id={{ trunk_if.id }}"
+        method: GET
+        headers:
+          Authorization: "Token {{ netbox_token }}"
+          Accept: "application/json"
+        return_content: yes
+      register: child_interfaces_result
+      changed_when: false
+      
+    - name: Extract VLAN and IP information from child interfaces
+      ansible.builtin.set_fact:
+        child_interface_data: >-
+          {% set data = [] %}
+          {% for iface in child_interfaces_result.json.results %}
+          {% set vlan_ids = (iface.tagged_vlans | map(attribute='vid') | list) if iface.tagged_vlans else [] %}
+          {% set ip_data = [] %}
+          {% if iface.count_ipaddresses > 0 %}
+          {% set ip_url = netbox_url + '/api/ipam/ip-addresses/?interface_id=' + iface.id | string %}
+          {% set ip_result = lookup('ansible.builtin.url', ip_url, headers={'Authorization': 'Token ' + netbox_token, 'Accept': 'application/json'}, wantlist=True) %}
+          {% if ip_result and ip_result.json %}
+          {% for ip in ip_result.json.results %}
+          {% set services = (ip.custom_fields | dict2items | selectattr('key', 'equalto', 'service_port') | first).value if ip.custom_fields and 'service_port' in ip.custom_fields else '' %}
+          {% set _ = ip_data.append({'address': ip.address, 'services': services}) %}
+          {% endfor %}
+          {% endif %}
+          {% endif %}
+          {% set _ = data.append({'name': iface.name, 'vlan_ids': vlan_ids, 'ip_addresses': ip_data}) %}
+          {% endfor %}
+          {{ data }}
+      
+    - name: Display NetBox configuration
+      ansible.builtin.debug:
+        msg: |
+          Device: {{ device.display | default('Unknown') }}
+          Trunk Interface: {{ trunk_if.name | default('Unknown') }} ({{ trunk_if.description | default('') }})
+          Child interfaces and VLANs:
+          {% for child in child_interface_data %}
+          - {{ child.name }}: VLANs {{ child.vlan_ids }}, IPs: {{ child.ip_addresses | map(attribute='address') | list }}
+          {% endfor %}
+      
+    - name: Collect all VLAN IDs from child interfaces
+      ansible.builtin.set_fact:
+        nb_vlan_ids: >-
+          {% set all_vlans = [] %}
+          {% for child in child_interface_data %}
+          {% set _ = all_vlans.extend(child.vlan_ids) %}
+          {% endfor %}
+          {{ all_vlans | unique | sort | list }}
+      
+    - name: Collect all IP address data
+      ansible.builtin.set_fact:
+        nb_ip_data: >-
+          {% set all_ips = [] %}
+          {% for child in child_interface_data %}
+          {% for vlan_id in child.vlan_ids %}
+          {% for ip_info in child.ip_addresses %}
+          {% set _ = all_ips.append({'interface': child.name, 'vlan': vlan_id, 'address': ip_info.address, 'services': ip_info.services}) %}
+          {% endfor %}
+          {% endfor %}
+          {% endfor %}
+          {{ all_ips }}
+      
+    # ===== Get current host VLAN interfaces =====
+    
+    - name: Get current VLAN IDs on host
+      ansible.builtin.command: python3 /opt/ansible/get_vlan_ids.py {{ trunk_interface }}
+      register: host_vlan_raw
+      changed_when: false
+      
+    - name: Set host VLAN IDs fact
+      ansible.builtin.set_fact:
+        host_vlan_ids: "{{ host_vlan_raw.stdout | from_json }}"
+      
+    - name: Check current VLAN interface states
+      ansible.builtin.command: "ip -o link show | grep {{ trunk_interface }}. || echo '[]'"
+      register: vlan_interfaces_raw
+      changed_when: false
+      
+    - name: Parse VLAN interface states
+      ansible.builtin.set_fact:
+        vlan_interface_states: >-
+          {% set states = {} %}
+          {% for line in vlan_interfaces_raw.stdout.split('\n') %}
+          {% if trunk_interface + '.' in line %}
+          {% set ifname = line.split(':')[1].strip().split('@')[0].split()[0] %}
+          {% set state_line = line %}
+          {% if 'UP' in line %}
+          {% set _ = states.update({ifname: true}) %}
+          {% else %}
+          {% set _ = states.update({ifname: false}) %}
+          {% endif %}
+          {% endif %}
+          {% endfor %}
+          {{ states }}
+      
+    - name: Check if trunk interface exists on this host
+      ansible.builtin.command: "ip link show {{ trunk_interface }}"
+      register: if_check
+      ignore_errors: yes
+      changed_when: false
+      
+    # ===== Reconcile VLAN interfaces =====
+    
+    - name: Create VLAN interfaces that exist in NetBox but not on host
+      ansible.builtin.command: "ip link add link {{ trunk_interface }} name {{ trunk_interface }}.{{ item }} type vlan id {{ item }}"
+      loop: "{{ nb_vlan_ids | difference(host_vlan_ids | default([])) | list }}"
+      when: nb_vlan_ids | length > 0 and if_check.rc == 0
+      register: vlan_created
+      changed_when: vlan_created.rc == 0
+      ignore_errors: yes
+      
+    - name: Remove VLAN interfaces that exist on host but not in NetBox
+      ansible.builtin.command: "ip link del {{ trunk_interface }}.{{ item }}"
+      loop: "{{ (host_vlan_ids | default([])) | difference(nb_vlan_ids) | list }}"
+      when: host_vlan_ids | length > 0 and if_check.rc == 0
+      register: vlan_removed
+      changed_when: vlan_removed.rc == 0
+      ignore_errors: yes
+      
+    - name: Bring up VLAN interfaces that are down
+      ansible.builtin.command: "ip link set {{ trunk_interface }}.{{ item }} up"
+      loop: "{{ nb_vlan_ids | list }}"
+      when: 
+        - nb_vlan_ids | length > 0 
+        - if_check.rc == 0
+        - (trunk_interface + '.' + item|string) not in vlan_interface_states or not vlan_interface_states[trunk_interface + '.' + item|string]
+      register: vlan_up
+      changed_when: vlan_up.rc == 0
+      ignore_errors: yes
+      
+    # ===== Reconcile IP addresses =====
+    
+    - name: Configure IP addresses on VLAN interfaces
+      ansible.builtin.command: >-
+        ip addr add {{ item.address }}/{{ item.address.split('/')[-1] if '/' in item.address else '24' }} dev {{ trunk_interface }}.{{ item.vlan }}
+      loop: "{{ nb_ip_data }}"
+      when: 
+        - nb_ip_data | length > 0
+        - if_check.rc == 0
+        - (trunk_interface + '.' + item.vlan|string) in vlan_interface_states
+      register: ip_configured
+      changed_when: ip_configured.rc == 0
+      ignore_errors: yes
+      
+    # ===== Generate persistent network configuration =====
+    
+    - name: Generate network configuration script
+      ansible.builtin.copy:
+        dest: "{{ network_config }}"
+        mode: '0755'
+        content: |
+          #!/bin/bash
+          # Auto-generated by NetBox reconciliation - {{ ansible_date_time.iso8601 }}
+          TRUNK_IF="{{ trunk_interface }}"
+          
+          # Bring up trunk interface
+          ip link set $TRUNK_IF up 2>/dev/null
+          
+          # Create and configure VLAN interfaces
+          {% for vlan_id in nb_vlan_ids %}
+          ip link add link $TRUNK_IF name $TRUNK_IF.{{ vlan_id }} type vlan id {{ vlan_id }} 2>/dev/null || true
+          ip link set $TRUNK_IF.{{ vlan_id }} up 2>/dev/null || true
+          {% endfor %}
+          
+          # Configure IP addresses
+          {% for ip_info in nb_ip_data %}
+          CIDR="{{ ip_info.address.split('/')[-1] if '/' in ip_info.address else '24' }}"
+          ip addr add {{ ip_info.address }}/$CIDR dev $TRUNK_IF.{{ ip_info.vlan }} 2>/dev/null || true
+          {% endfor %}
+      
+    - name: Register network config as a service for persistence
+      ansible.builtin.systemd:
+        name: netbox-network
+        state: started
+        enabled: yes
+        scope: system
+      register: systemd_result
+      ignore_errors: yes
+      
+    # ===== Generate TCP service simulation configuration =====
+    
+    - name: Generate TCP service simulation configuration
+      ansible.builtin.copy:
+        dest: "{{ tcp_sim_config }}"
+        mode: '0644'
+        content: |
+          {
+            "services": [
+              {% for ip_info in nb_ip_data %}
+              {% if ip_info.services %}
+              {% for service in ip_info.services.split(',') %}
+              {
+                "ip": "{{ ip_info.address.split('/')[0] }}",
+                "port": {{ service.split('-')[1] | int }},
+                "protocol": "{{ service.split('-')[0] }}",
+                "banner": "Service {{ service }} on {{ ip_info.address.split('/')[0] }}"
+              }{% if not loop.last %},{% endif %}
+              {% endfor %}
+              {% endif %}
+              {% endfor %}
+            ]
+          }
+      when: nb_ip_data | selectattr('services', 'defined') | select('services') | list | length > 0
+      
+    # ===== Summary =====
+    
+    - name: Display full reconciliation summary
+      ansible.builtin.debug:
+        msg: |
+          {% set created = vlan_created.results | selectattr('changed', 'equalto', true) | map(attribute='item') | list %}
+          {% set removed = vlan_removed.results | selectattr('changed', 'equalto', true) | map(attribute='item') | list %}
+          {% set uplifted = vlan_up.results | selectattr('changed', 'equalto', true) | map(attribute='item') | list %}
+          {% set ips_set = ip_configured.results | selectattr('changed', 'equalto', true) | map(attribute='item.address') | list %}
+          
+          === NetBox Reconciliation Summary ===
+          
+          Device: {{ device.display | default('Unknown') }}
+          Trunk Interface: {{ trunk_if.name | default('Unknown') }}
+          
+          NetBox VLANs: {{ nb_vlan_ids | default([]) }}
+          Host VLANs (before): {{ host_vlan_ids | default([]) }}
+          
+          Actions:
+          {% if created %}
+          Created VLAN interfaces: {{ created }}
+          {% else %}
+          Created VLAN interfaces: None
+          {% endif %}
+          {% if removed %}
+          Removed VLAN interfaces: {{ removed }}
+          {% else %}
+          Removed VLAN interfaces: None
+          {% endif %}
+          {% if uplifted %}
+          Brought up VLAN interfaces: {{ uplifted }}
+          {% else %}
+          Brought up VLAN interfaces: None
+          {% endif %}
+          {% if ips_set %}
+          Configured IPs: {{ ips_set }}
+          {% else %}
+          Configured IPs: None
+          {% endif %}
+          
+          {% if nb_ip_data %}
+          TCP Services to configure:
+          {% for ip_info in nb_ip_data %}
+          - {{ ip_info.address }} (VLAN {{ ip_info.vlan }}): {{ ip_info.services | default('') }}
+          {% endfor %}
+          {% endif %}
+          
+          Persistence:
+          - Network config: {{ network_config }}
+          - TCP services config: {{ tcp_sim_config }}
+          
+          Final: Host VLANs and IPs match NetBox

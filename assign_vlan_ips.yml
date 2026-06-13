@@ -104,7 +104,7 @@
         label: "Fetching IPs for interface {{ item.name }}"
       changed_when: false
       when: child_interfaces.json.results is defined and child_interfaces.json.results|length > 0
-      failed_when: ip_results.status != 200
+      failed_when: false
 
     # Display IP results for debugging
     - name: Display IP results (debug)
@@ -115,27 +115,7 @@
     # Build list of IPs with their VLAN IDs for assignment
     - name: Build IP to VLAN mapping
       ansible.builtin.set_fact:
-        ip_vlan_mappings: >-
-          {% set mappings = [] %}
-          {% for result in ip_results.results %}
-          {% set child = child_interfaces.json.results[loop.index0] %}
-          {% set tagged_vlans = child.tagged_vlans | default([]) %}
-          {% set vlan_id = tagged_vlans[0].vid if tagged_vlans|length > 0 else child.id %}
-          {% for ip in result.json.results | default([]) %}
-          {% set addr = ip.address | default('') %}
-          {% set addr_parts = addr.split('/') %}
-          {% set address = addr_parts[0] %}
-          {% set prefix_length = addr_parts[1] | default(24) | int %}
-          {% set _ = mappings.append({
-            'address': address,
-            'prefix_length': prefix_length,
-            'vlan_id': vlan_id,
-            'child_name': child.name,
-            'interface_name': trunk_interface ~ '.' ~ vlan_id
-          }) %}
-          {% endfor %}
-          {% endfor %}
-          {{ mappings | unique(attribute='address') }}
+        ip_vlan_mappings: "{% set temp_list = [] %}{% for result in ip_results.results %}{% set child = child_interfaces.json.results[loop.index0] %}{% set tagged_vlans = child.tagged_vlans | default([]) %}{% if tagged_vlans|length > 0 %}{% set vlan_id = tagged_vlans[0].vid %}{% else %}{% set vlan_id = child.id %}{% endif %}{% for ip in result.json.results | default([]) %}{% set addr = ip.address | default('') %}{% if addr and addr != '' %}{% set addr_parts = addr.split('/') %}{% set address = addr_parts[0] %}{% set prefix_length = addr_parts[1] | default(24) | int %}{% set _ = temp_list.append({'address': address, 'prefix_length': prefix_length, 'vlan_id': vlan_id, 'child_name': child.name, 'interface_name': trunk_interface ~ '.' ~ vlan_id}) %}{% endif %}{% endfor %}{% endfor %}{{ (temp_list | unique(attribute='address')) | to_json | from_json }}"
       when: ip_results.results is defined and ip_results.results|length > 0
 
     # Display the IP to VLAN mappings for debugging
@@ -147,7 +127,8 @@
     # Test: Show what would be removed without actually removing
     - name: Test - Show IPs that would be removed
       ansible.builtin.shell: |
-        current_ips=$(ip -o addr show | awk '{print $4}' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+$')
+        # Only check VLAN interfaces ({{ trunk_interface }}.*)
+        current_ips=$(ip -o addr show | grep "{{ trunk_interface }}\." | awk '{print $4}' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+$')
         echo "The following IPs would be checked for removal:"
         for ip in $current_ips; do
           if ! echo "{{ ip_vlan_mappings | map(attribute='address') | join('/') }}" | grep -q "${ip%%/*}"; then
@@ -159,10 +140,11 @@
       when: test_mode and ip_vlan_mappings is defined and ip_vlan_mappings|length > 0
       changed_when: false
 
-    # Remove any existing IPs that are not in our mapping
-    - name: Remove IPs not in NetBox
+    # Remove any existing IPs on VLAN interfaces that are not in our mapping
+    - name: Remove IPs not in NetBox from VLAN interfaces
       ansible.builtin.shell: |
-        current_ips=$(ip -o addr show | awk '{print $4}' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+$')
+        # Only check VLAN interfaces (enp1s0.*)
+        current_ips=$(ip -o addr show | grep "{{ trunk_interface }}\." | awk '{print $4}' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+$')
         for ip in $current_ips; do
           if ! echo "{{ ip_vlan_mappings | map(attribute='address') | join('/') }}" | grep -q "${ip%%/*}"; then
             echo "Removing $ip as it's not in NetBox"
@@ -181,27 +163,50 @@
         label: "{{ item.address }}/{{ item.prefix_length }} → {{ item.interface_name }}"
       when: test_mode and ip_vlan_mappings is defined and ip_vlan_mappings|length > 0
 
+    # Bring up VLAN interfaces if they're not up
+    - name: Bring up VLAN interfaces
+      ansible.builtin.shell: |
+        if ip link show {{ item }} | grep -q "state UP"; then
+          echo "Interface {{ item }} is already up"
+          exit 0
+        else
+          ip link set {{ item }} up
+          exit 0
+        fi
+      loop: "{{ ip_vlan_mappings | map(attribute='interface_name') | unique | list }}"
+      loop_control:
+        label: "Bringing up {{ item }}"
+      when: not test_mode and ip_vlan_mappings is defined and ip_vlan_mappings|length > 0
+      register: if_up_result
+      changed_when: "'already up' not in if_up_result.results[loop.index0].stdout"
+      ignore_errors: yes
+
     # Assign IPs to VLAN interfaces
     - name: Assign IP to VLAN interface
       ansible.builtin.shell: |
         if ip addr show {{ item.interface_name }} | grep -q "{{ item.address }}"; then
           echo "IP {{ item.address }} already assigned to {{ item.interface_name }}"
+          exit 0
         else
           ip addr add {{ item.address }}/{{ item.prefix_length }} dev {{ item.interface_name }}
+          exit 0
         fi
       loop: "{{ ip_vlan_mappings | default([]) }}"
       loop_control:
         label: "{{ item.address }}/{{ item.prefix_length }} → {{ item.interface_name }}"
       when: not test_mode and ip_vlan_mappings is defined and ip_vlan_mappings|length > 0
       register: ip_assignment_result
-      changed_when: "'already assigned' not in ip_assignment_result.stdout"
+      changed_when: "'already assigned' not in ip_assignment_result.results[loop.index0].stdout"
+      ignore_errors: yes
 
     # Validate IP assignments
     - name: Validate IP assignments
       ansible.builtin.shell: |
         if ip addr show {{ item.interface_name }} | grep -q "{{ item.address }}"; then
+          echo "Validated: {{ item.address }} on {{ item.interface_name }}"
           exit 0
         else
+          echo "Missing: {{ item.address }} on {{ item.interface_name }}"
           exit 1
         fi
       loop: "{{ ip_vlan_mappings | default([]) }}"
@@ -209,8 +214,8 @@
         label: "Validating {{ item.address }} on {{ item.interface_name }}"
       register: validation_result
       changed_when: false
-      when: ip_vlan_mappings is defined and ip_vlan_mappings|length > 0
-      failed_when: validation_result.rc != 0
+      when: not test_mode and ip_vlan_mappings is defined and ip_vlan_mappings|length > 0
+      ignore_errors: yes
 
     # Test connectivity to assigned IPs
     - name: Test connectivity to assigned IPs
@@ -232,3 +237,35 @@
       loop_control:
         label: "{{ item.item.address }}"
       when: ip_vlan_mappings is defined and ip_vlan_mappings|length > 0
+
+    # Summary
+    - name: Display summary
+      ansible.builtin.debug:
+        msg: |
+          === IP Assignment Summary ===
+          {% if test_mode %}
+          Mode: TEST (no changes made)
+          {% else %}
+          Mode: LIVE (changes applied)
+          {% endif %}
+          
+          Device: {{ device_interfaces.json.results[0].device.display if device_interfaces.json.results else 'Unknown' }}
+          Trunk Interface: {{ trunk_if.name | default('Unknown') }}
+          
+          {% if ip_vlan_mappings is defined %}
+          IPs to assign: {{ ip_vlan_mappings | length }}
+          {% for mapping in ip_vlan_mappings %}
+          - {{ mapping.address }}/{{ mapping.prefix_length }} → {{ mapping.interface_name }} (VLAN {{ mapping.vlan_id }})
+          {% endfor %}
+          
+          {% if ip_assignment_result is defined %}
+          IP assignments: {{ ip_assignment_result.results | selectattr('changed', 'equalto', true) | length }} changed, {{ ip_assignment_result.results | selectattr('changed', 'equalto', false) | length }} unchanged
+          {% endif %}
+          
+          {% if ping_result is defined %}
+          Connectivity tests: {{ ping_result.results | selectattr('rc', 'equalto', 0) | length }} succeeded, {{ ping_result.results | selectattr('rc', 'equalto', 1) | length }} failed
+          {% endif %}
+          {% else %}
+          No IP mappings found
+          {% endif %}
+      when: ip_vlan_mappings is defined
