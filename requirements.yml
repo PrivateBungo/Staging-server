@@ -1,0 +1,15 @@
+---
+# Ansible Collection Requirements
+# Install with: ansible-galaxy collection install -r requirements.yml
+
+collections:
+  - name: netbox.netbox
+    version: ">=4.0.0"
+    # The official NetBox collection for Ansible
+    # Documentation: https://galaxy.ansible.com/netbox/netbox
+
+# To install all requirements:
+#   ansible-galaxy collection install -r requirements.yml
+#
+# To verify installation:
+#   ansible-galaxy collection list

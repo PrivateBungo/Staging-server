@@ -16,8 +16,9 @@ This repository contains a comprehensive integration between NetBox (Network Sou
 5. [Persistence Mechanism](#persistence-mechanism)
 6. [Real-time Reconciliation](#real-time-reconciliation)
 7. [Future Work](#future-work)
-8. [API Examples](#api-examples)
-9. [Security Notes](#security-notes)
+8. [Official NetBox Collection Support](#official-netbox-collection-support)
+9. [API Examples](#api-examples)
+10. [Security Notes](#security-notes)
 
 ---
 
@@ -1121,6 +1122,162 @@ spec:
 2. Consider Kubernetes operator for containerized deployments
 3. Add automated testing of reconciliation
 4. Implement configuration drift detection
+
+---
+
+## Official NetBox Collection Support
+
+**✅ NOW AVAILABLE:** The repository now includes support for the official `netbox.netbox` Ansible collection alongside the existing custom implementation.
+
+### What's New
+
+The following files have been added to support the official collection:
+
+| File | Purpose |
+|------|---------|
+| `requirements.yml` | Collection dependencies definition |
+| `inventory.yml` | Official NetBox inventory plugin configuration |
+| `ansible.cfg` | Ansible configuration with inventory plugins enabled |
+| `netbox_reconcile_collection.yml` | New reconciliation playbook using official collection modules |
+| `NETBOX_COLLECTION_GUIDE.md` | Complete guide for using the official collection |
+
+### Dual Approach Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    NetBox (SoT)                                   │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+        ┌─────────────────────┴─────────────────────┐
+        │                                       │
+        ▼                                       ▼
+┌─────────────────────┐               ┌─────────────────────────┐
+│  LEGACY APPROACH     │               │  OFFICIAL COLLECTION     │
+│                     │               │                         │
+│  • netbox_api.py    │               │  • requirements.yml      │
+│  • netbox_inventory.py│               │  • inventory.yml         │
+│  • fetch_netbox_data.py│               │  • ansible.cfg           │
+│  • netbox_*.yml      │               │  • netbox_reconcile_     │
+│    (legacy playbooks)│               │    collection.yml        │
+└─────────────────────┘               └─────────────────────────┘
+        │                                       │
+        └─────────────────────┬─────────────────────┘
+                              ▼
+              ┌─────────────────────────────────┐
+              │       Target Systems              │
+              │  (staging-server, cisco switches)  │
+              └─────────────────────────────────┘
+```
+
+### Key Benefits of Official Collection
+
+| Feature | Legacy Approach | Official Collection |
+|---------|----------------|-------------------|
+| Maintenance | Manual updates | Community-supported |
+| Pagination | ❌ Not handled | ✅ Automatic |
+| Error Handling | Basic | ✅ Robust |
+| API Coverage | Limited | ✅ Complete |
+| Performance | Manual HTTP calls | ✅ Optimized |
+| Future-proof | ❌ May break | ✅ Maintained |
+| Documentation | Custom | ✅ Official |
+
+### Quick Start with Official Collection
+
+#### 1. Install Dependencies (Debian)
+
+```bash
+# Install pynetbox via APT (recommended for Debian)
+sudo apt update
+sudo apt install -y python3-pynetbox
+
+# Install the Ansible collection
+ansible-galaxy collection install netbox.netbox
+
+# Verify
+ansible-galaxy collection list | grep netbox
+python3 -c "import pynetbox; print(pynetbox.__version__)"
+```
+
+#### 2. Set Environment Variable
+
+```bash
+# Add to ~/.bashrc
+echo 'export NETBOX_TOKEN="RUmeVgksKcgogMd7tn5TrkIphBEGrQEUKibOmayQ"' >> ~/.bashrc
+source ~/.bashrc
+```
+
+#### 3. Test the New Inventory
+
+```bash
+# List all hosts from NetBox
+ansible -i inventory.yml all --list-hosts
+
+# Test connectivity
+ansible -i inventory.yml all -m ping
+```
+
+#### 4. Run the New Playbook
+
+```bash
+# Dry run
+ansible-playbook -i inventory.yml netbox_reconcile_collection.yml --check
+
+# Live run
+ansible-playbook -i inventory.yml netbox_reconcile_collection.yml
+```
+
+### Using Both Approaches Together
+
+Both the legacy and collection-based approaches can coexist:
+
+```bash
+# Legacy approach (still works)
+ansible -i netbox_inventory.py all -m ping
+ansible-playbook netbox_reconcile.yml
+
+# Collection approach (new)
+ansible -i inventory.yml all -m ping
+ansible-playbook -i inventory.yml netbox_reconcile_collection.yml
+```
+
+### Migration Path
+
+**Phase 1: Test (Current)**
+- ✅ Install collection and dependencies
+- ✅ Test `inventory.yml`
+- ✅ Test `netbox_reconcile_collection.yml`
+- ✅ Keep legacy files for fallback
+
+**Phase 2: Gradual Migration**
+- Update existing playbooks to use collection modules
+- Replace custom API calls with official modules
+- Test thoroughly
+
+**Phase 3: Full Migration (Optional)**
+- Remove legacy playbooks (or keep as backup)
+- Standardize on collection-based approach
+
+### Files Reference
+
+**New Files (Collection Support):**
+- `requirements.yml` - Collection dependencies
+- `inventory.yml` - Official inventory plugin config
+- `ansible.cfg` - Ansible configuration
+- `netbox_reconcile_collection.yml` - New reconciliation playbook
+- `NETBOX_COLLECTION_GUIDE.md` - Complete guide
+
+**Existing Files (Legacy - Still Supported):**
+- `inventory.ini` - Static inventory
+- `netbox_inventory.py` - Custom dynamic inventory
+- `netbox_api.py` - Custom API client
+- `fetch_netbox_data.py` - Custom data fetcher
+- `netbox_reconcile.yml` - Legacy reconciliation
+- `netbox_fetch.yml` - Legacy VLAN fetch
+- `assign_vlan_ips.yml` - Legacy IP assignment
+- `get_vlan_ids.py` - Local VLAN discovery
+- `tcp_simulator.py` - TCP service simulation
+
+**See Also:** [NETBOX_COLLECTION_GUIDE.md](NETBOX_COLLECTION_GUIDE.md) for complete documentation on using the official collection.
 
 ---
 
