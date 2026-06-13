@@ -1,0 +1,74 @@
+---
+# NetBox Dynamic Inventory using official netbox.netbox collection
+# This replaces the custom netbox_inventory.py script
+#
+# Usage:
+#   ansible -i inventory.yml all -m ping
+#   ansible-playbook -i inventory.yml playbook.yml
+#
+# Prerequisites:
+#   - netbox.netbox collection installed: ansible-galaxy collection install netbox.netbox
+#   - pynetbox Python library installed: pip install pynetbox (or apt install python3-pynetbox on Debian)
+#
+# Environment Variables:
+#   Set NETBOX_TOKEN in your environment or use ansible-vault
+#   export NETBOX_TOKEN="your_api_token_here"
+
+plugin: netbox.netbox.netbox
+
+# NetBox API configuration
+netbox_url: "http://10.100.66.48:8000"
+netbox_token: "{{ lookup('env', 'NETBOX_TOKEN') }}"
+
+# SSL/TLS verification (disable for development with self-signed certs)
+validate_certs: false
+
+# Query parameters for filtering devices
+# Uncomment and modify as needed:
+# query_params:
+#   device_role: "server"
+#   status: "active"
+
+# Group configuration
+# This creates Ansible groups based on NetBox data
+groups:
+  # Group by device role
+  device_roles: "device_role.slug"
+  # Group by site
+  sites: "site.slug"
+  # Group by device type
+  device_types: "device_type.slug"
+
+# Host variables to include from NetBox
+# These will be available as hostvars for each device
+# Example: hostvars[inventory_hostname]['netbox_id']
+compose:
+  # Basic device info
+  netbox_id: "id"
+  netbox_name: "name"
+  netbox_display_name: "display"
+  netbox_description: "description"
+  netbox_status: "status.label"
+  
+  # Device type and role
+  netbox_device_type: "device_type.model"
+  netbox_device_role: "device_role.name"
+  netbox_device_role_slug: "device_role.slug"
+  
+  # Site info
+  netbox_site: "site.name"
+  netbox_site_slug: "site.slug"
+  
+  # Primary IP
+  netbox_primary_ip: "primary_ip.address"
+  netbox_primary_ip_id: "primary_ip.id"
+  
+  # Custom fields (if any)
+  netbox_custom_fields: "custom_fields"
+
+# Advanced: You can also add computed variables
+# keyed_groups:
+#   - key: device_role.slug
+#     prefix: "role_"
+#   - key: site.slug
+#     prefix: "site_"
