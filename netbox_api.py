@@ -8,13 +8,16 @@ using the stored API token.
 import requests
 import json
 import sys
+import os
 
 # NetBox Configuration
-NETBOX_URL = "http://10.100.66.48:8000"
-API_TOKEN = "RUmeVgksKcgogMd7tn5TrkIphBEGrQEUKibOmayQ"
+# Supports environment variables for security
+NETBOX_URL = os.getenv('NETBOX_URL', 'http://10.100.66.48:8000')
+API_TOKEN = os.getenv('NETBOX_TOKEN', 'RUmeVgksKcgogMd7tn5TrkIphBEGrQEUKibOmayQ')
 
 # Disable SSL verification for development (remove in production)
-VERIFY_SSL = False
+# Can be overridden with NETBOX_VERIFY_SSL=true environment variable
+VERIFY_SSL = os.getenv('NETBOX_VERIFY_SSL', 'false').lower() == 'true'
 
 
 def api_request(method, endpoint, data=None, params=None):

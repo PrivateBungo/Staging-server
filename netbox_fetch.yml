@@ -5,8 +5,9 @@
   gather_facts: false
   
   vars:
-    netbox_url: "http://10.100.66.48:8000"
-    netbox_token: "RUmeVgksKcgogMd7tn5TrkIphBEGrQEUKibOmayQ"
+    # NetBox configuration - supports environment variables
+    netbox_url: "{{ lookup('env', 'NETBOX_URL') | default('http://10.100.66.48:8000', true) }}"
+    netbox_token: "{{ lookup('env', 'NETBOX_TOKEN') | default('RUmeVgksKcgogMd7tn5TrkIphBEGrQEUKibOmayQ', true) }}"
     device_name: "staging-server"
     trunk_interface: "enp1s0"
   
