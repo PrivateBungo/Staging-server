@@ -1,0 +1,736 @@
+all:
+  hosts:
+    staging-server:
+      ansible_host: 10.100.66.48
+      netbox_id: 1
+      netbox_name: staging-server
+      netbox_display_name: staging-server
+      netbox_description: ''
+      netbox_status: active
+      netbox_device_type: Debian Server
+      netbox_device_type_slug: debian-server
+      netbox_device_role: Server
+      netbox_device_role_slug: server
+      netbox_manufacturer: Linux
+      netbox_site: Local
+      netbox_site_slug: local
+      network:
+        interfaces:
+        - id: 2
+          name: eno1
+          label: Mgmt
+          type: 1000base-t
+          type_label: 1000BASE-T (1GE)
+          mode: tagged
+          mode_label: Tagged
+          enabled: true
+          description: Active internet interface - DHCP
+          parent: null
+          parent_id: null
+          mgmt_only: false
+          untagged_vlan: null
+          tagged_vlans: []
+          ip_addresses:
+          - id: 5
+            address: 10.100.66.48/24
+            address_no_prefix: 10.100.66.48
+            family: 4
+            description: MGMt staging server
+            custom_fields:
+              service_port: null
+            services: []
+          listener_services: []
+        - id: 1
+          name: enp1s0
+          label: ''
+          type: 1000base-t
+          type_label: 1000BASE-T (1GE)
+          mode: tagged
+          mode_label: Tagged
+          enabled: true
+          description: Trunk port for VLANs 2000, 2008, 2016, 2080
+          parent: null
+          parent_id: null
+          mgmt_only: false
+          untagged_vlan: null
+          tagged_vlans:
+          - id: 5
+            vid: 2240
+            name: staging-mgmt
+            display: staging-mgmt (2240)
+            slug: null
+            site: null
+            description: Management VLAN between staging-server and staging-switch
+          ip_addresses: []
+          listener_services: []
+        - id: 4
+          name: box-pc-vlan
+          label: ''
+          type: virtual
+          type_label: Virtual
+          mode: tagged
+          mode_label: Tagged
+          enabled: true
+          description: ''
+          parent: enp1s0
+          parent_id: 1
+          mgmt_only: false
+          untagged_vlan: null
+          tagged_vlans:
+          - id: 3
+            vid: 2008
+            name: box-pc
+            display: box-pc (2008)
+            slug: null
+            site: null
+            description: ''
+          ip_addresses:
+          - id: 2
+            address: 10.2.223.10/29
+            address_no_prefix: 10.2.223.10
+            family: 4
+            description: ''
+            custom_fields:
+              service_port: TCP-3389
+            services:
+            - protocol: TCP
+              port: 3389
+              raw: TCP-3389
+          listener_services:
+          - device: staging-server
+            interface: box-pc-vlan
+            ip: 10.2.223.10
+            protocol: TCP
+            port: 3389
+            raw: TCP-3389
+        - id: 12
+          name: mgmt-vlan
+          label: ''
+          type: virtual
+          type_label: Virtual
+          mode: tagged
+          mode_label: Tagged
+          enabled: true
+          description: Management VLAN 2240
+          parent: enp1s0
+          parent_id: 1
+          mgmt_only: false
+          untagged_vlan: null
+          tagged_vlans:
+          - id: 5
+            vid: 2240
+            name: staging-mgmt
+            display: staging-mgmt (2240)
+            slug: null
+            site: null
+            description: Management VLAN between staging-server and staging-switch
+          ip_addresses:
+          - id: 6
+            address: 10.2.223.242/29
+            address_no_prefix: 10.2.223.242
+            family: 4
+            description: Management IP
+            custom_fields:
+              service_port: null
+            services: []
+          listener_services: []
+        - id: 3
+          name: site-server-VLAN
+          label: ''
+          type: virtual
+          type_label: Virtual
+          mode: tagged
+          mode_label: Tagged
+          enabled: true
+          description: ''
+          parent: enp1s0
+          parent_id: 1
+          mgmt_only: false
+          untagged_vlan: null
+          tagged_vlans:
+          - id: 1
+            vid: 2000
+            name: site-server
+            display: site-server (2000)
+            slug: null
+            site: null
+            description: ''
+          ip_addresses:
+          - id: 1
+            address: 10.2.223.2/29
+            address_no_prefix: 10.2.223.2
+            family: 4
+            description: ''
+            custom_fields:
+              service_port: TCP-22, TCP-10022
+            services:
+            - protocol: TCP
+              port: 22
+              raw: TCP-22
+            - protocol: TCP
+              port: 10022
+              raw: TCP-10022
+          listener_services:
+          - device: staging-server
+            interface: site-server-VLAN
+            ip: 10.2.223.2
+            protocol: TCP
+            port: 22
+            raw: TCP-22
+          - device: staging-server
+            interface: site-server-VLAN
+            ip: 10.2.223.2
+            protocol: TCP
+            port: 10022
+            raw: TCP-10022
+        - id: 5
+          name: steering-vm-vlan
+          label: ''
+          type: virtual
+          type_label: Virtual
+          mode: tagged
+          mode_label: Tagged
+          enabled: true
+          description: ''
+          parent: enp1s0
+          parent_id: 1
+          mgmt_only: false
+          untagged_vlan: null
+          tagged_vlans:
+          - id: 2
+            vid: 2016
+            name: steering-vm
+            display: steering-vm (2016)
+            slug: null
+            site: null
+            description: ''
+          ip_addresses:
+          - id: 3
+            address: 10.2.223.18/29
+            address_no_prefix: 10.2.223.18
+            family: 4
+            description: ''
+            custom_fields:
+              service_port: null
+            services: []
+          listener_services: []
+        - id: 6
+          name: topwind-vlan
+          label: ''
+          type: virtual
+          type_label: Virtual
+          mode: tagged
+          mode_label: Tagged
+          enabled: true
+          description: ''
+          parent: enp1s0
+          parent_id: 1
+          mgmt_only: false
+          untagged_vlan: null
+          tagged_vlans:
+          - id: 4
+            vid: 2080
+            name: topwind
+            display: topwind (2080)
+            slug: null
+            site: null
+            description: ''
+          ip_addresses:
+          - id: 4
+            address: 10.2.223.82/29
+            address_no_prefix: 10.2.223.82
+            family: 4
+            description: ''
+            custom_fields:
+              service_port: null
+            services: []
+          listener_services: []
+        vlans:
+        - id: 1
+          vid: 2000
+          name: site-server
+          display: site-server (2000)
+          slug: null
+          site: null
+          description: ''
+        - id: 3
+          vid: 2008
+          name: box-pc
+          display: box-pc (2008)
+          slug: null
+          site: null
+          description: ''
+        - id: 2
+          vid: 2016
+          name: steering-vm
+          display: steering-vm (2016)
+          slug: null
+          site: null
+          description: ''
+        - id: 4
+          vid: 2080
+          name: topwind
+          display: topwind (2080)
+          slug: null
+          site: null
+          description: ''
+        - id: 5
+          vid: 2240
+          name: staging-mgmt
+          display: staging-mgmt (2240)
+          slug: null
+          site: null
+          description: Management VLAN between staging-server and staging-switch
+        ip_addresses:
+        - interface: eno1
+          interface_id: 2
+          address: 10.100.66.48/24
+          address_no_prefix: 10.100.66.48
+          custom_fields:
+            service_port: null
+          services: []
+        - interface: box-pc-vlan
+          interface_id: 4
+          address: 10.2.223.10/29
+          address_no_prefix: 10.2.223.10
+          custom_fields:
+            service_port: TCP-3389
+          services:
+          - protocol: TCP
+            port: 3389
+            raw: TCP-3389
+        - interface: mgmt-vlan
+          interface_id: 12
+          address: 10.2.223.242/29
+          address_no_prefix: 10.2.223.242
+          custom_fields:
+            service_port: null
+          services: []
+        - interface: site-server-VLAN
+          interface_id: 3
+          address: 10.2.223.2/29
+          address_no_prefix: 10.2.223.2
+          custom_fields:
+            service_port: TCP-22, TCP-10022
+          services:
+          - protocol: TCP
+            port: 22
+            raw: TCP-22
+          - protocol: TCP
+            port: 10022
+            raw: TCP-10022
+        - interface: steering-vm-vlan
+          interface_id: 5
+          address: 10.2.223.18/29
+          address_no_prefix: 10.2.223.18
+          custom_fields:
+            service_port: null
+          services: []
+        - interface: topwind-vlan
+          interface_id: 6
+          address: 10.2.223.82/29
+          address_no_prefix: 10.2.223.82
+          custom_fields:
+            service_port: null
+          services: []
+        listener_services:
+        - ip: 10.2.223.10
+          address: 10.2.223.10/29
+          interface: box-pc-vlan
+          port: 3389
+          protocol: TCP
+          raw: TCP-3389
+        - ip: 10.2.223.2
+          address: 10.2.223.2/29
+          interface: site-server-VLAN
+          port: 22
+          protocol: TCP
+          raw: TCP-22
+        - ip: 10.2.223.2
+          address: 10.2.223.2/29
+          interface: site-server-VLAN
+          port: 10022
+          protocol: TCP
+          raw: TCP-10022
+        trunk_ports:
+        - name: eno1
+          id: 2
+          mode: tagged
+          description: Active internet interface - DHCP
+          parent: null
+          untagged_vlan: null
+          tagged_vlans: []
+        - name: enp1s0
+          id: 1
+          mode: tagged
+          description: Trunk port for VLANs 2000, 2008, 2016, 2080
+          parent: null
+          untagged_vlan: null
+          tagged_vlans:
+          - id: 5
+            vid: 2240
+            name: staging-mgmt
+            display: staging-mgmt (2240)
+            slug: null
+            site: null
+            description: Management VLAN between staging-server and staging-switch
+        management_interfaces:
+        - name: mgmt-vlan
+          id: 12
+          mode: tagged
+          description: Management VLAN 2240
+          parent: enp1s0
+          untagged_vlan: null
+          tagged_vlans:
+          - id: 5
+            vid: 2240
+            name: staging-mgmt
+            display: staging-mgmt (2240)
+            slug: null
+            site: null
+            description: Management VLAN between staging-server and staging-switch
+      ansible_user: gijs
+      ansible_password: 123GjH#@!
+      ansible_connection: ssh
+      ansible_become: true
+      ansible_become_method: sudo
+      ansible_become_password: 123GjH#@!
+    staging-switch:
+      ansible_host: 10.2.223.243
+      netbox_id: 2
+      netbox_name: staging-switch
+      netbox_display_name: staging-switch
+      netbox_description: ''
+      netbox_status: active
+      netbox_device_type: C1300-4G-24P
+      netbox_device_type_slug: c1300-4g-24p
+      netbox_device_role: Switch
+      netbox_device_role_slug: switch
+      netbox_manufacturer: Cisco
+      netbox_site: Local
+      netbox_site_slug: local
+      network:
+        interfaces:
+        - id: 7
+          name: '1'
+          label: ''
+          type: 1000base-t
+          type_label: 1000BASE-T (1GE)
+          mode: tagged
+          mode_label: Tagged
+          enabled: true
+          description: Trunk port
+          parent: null
+          parent_id: null
+          mgmt_only: false
+          untagged_vlan: null
+          tagged_vlans:
+          - id: 1
+            vid: 2000
+            name: site-server
+            display: site-server (2000)
+            slug: null
+            site: null
+            description: ''
+          - id: 3
+            vid: 2008
+            name: box-pc
+            display: box-pc (2008)
+            slug: null
+            site: null
+            description: ''
+          - id: 2
+            vid: 2016
+            name: steering-vm
+            display: steering-vm (2016)
+            slug: null
+            site: null
+            description: ''
+          - id: 4
+            vid: 2080
+            name: topwind
+            display: topwind (2080)
+            slug: null
+            site: null
+            description: ''
+          - id: 5
+            vid: 2240
+            name: staging-mgmt
+            display: staging-mgmt (2240)
+            slug: null
+            site: null
+            description: Management VLAN between staging-server and staging-switch
+          ip_addresses: []
+          listener_services: []
+        - id: 8
+          name: '2'
+          label: ''
+          type: 1000base-t
+          type_label: 1000BASE-T (1GE)
+          mode: access
+          mode_label: Access
+          enabled: true
+          description: Access VLAN 2000
+          parent: null
+          parent_id: null
+          mgmt_only: false
+          untagged_vlan:
+            id: 1
+            vid: 2000
+            name: site-server
+            display: site-server (2000)
+            slug: null
+            site: null
+            description: ''
+          tagged_vlans: []
+          ip_addresses: []
+          listener_services: []
+        - id: 9
+          name: '3'
+          label: ''
+          type: 1000base-t
+          type_label: 1000BASE-T (1GE)
+          mode: access
+          mode_label: Access
+          enabled: true
+          description: Access VLAN 2008
+          parent: null
+          parent_id: null
+          mgmt_only: false
+          untagged_vlan:
+            id: 3
+            vid: 2008
+            name: box-pc
+            display: box-pc (2008)
+            slug: null
+            site: null
+            description: ''
+          tagged_vlans: []
+          ip_addresses: []
+          listener_services: []
+        - id: 10
+          name: '4'
+          label: ''
+          type: 1000base-t
+          type_label: 1000BASE-T (1GE)
+          mode: access
+          mode_label: Access
+          enabled: true
+          description: Access VLAN 2016
+          parent: null
+          parent_id: null
+          mgmt_only: false
+          untagged_vlan:
+            id: 2
+            vid: 2016
+            name: steering-vm
+            display: steering-vm (2016)
+            slug: null
+            site: null
+            description: ''
+          tagged_vlans: []
+          ip_addresses: []
+          listener_services: []
+        - id: 11
+          name: '5'
+          label: ''
+          type: 1000base-t
+          type_label: 1000BASE-T (1GE)
+          mode: access
+          mode_label: Access
+          enabled: true
+          description: Access VLAN 2080
+          parent: null
+          parent_id: null
+          mgmt_only: false
+          untagged_vlan:
+            id: 4
+            vid: 2080
+            name: topwind
+            display: topwind (2080)
+            slug: null
+            site: null
+            description: ''
+          tagged_vlans: []
+          ip_addresses: []
+          listener_services: []
+        - id: 13
+          name: mgmt-vlan
+          label: ''
+          type: virtual
+          type_label: Virtual
+          mode: tagged
+          mode_label: Tagged
+          enabled: true
+          description: Management VLAN 2240
+          parent: '1'
+          parent_id: 7
+          mgmt_only: false
+          untagged_vlan: null
+          tagged_vlans:
+          - id: 5
+            vid: 2240
+            name: staging-mgmt
+            display: staging-mgmt (2240)
+            slug: null
+            site: null
+            description: Management VLAN between staging-server and staging-switch
+          ip_addresses:
+          - id: 7
+            address: 10.2.223.243/29
+            address_no_prefix: 10.2.223.243
+            family: 4
+            description: Management IP
+            custom_fields:
+              service_port: null
+            services: []
+          listener_services: []
+        vlans:
+        - id: 1
+          vid: 2000
+          name: site-server
+          display: site-server (2000)
+          slug: null
+          site: null
+          description: ''
+        - id: 3
+          vid: 2008
+          name: box-pc
+          display: box-pc (2008)
+          slug: null
+          site: null
+          description: ''
+        - id: 2
+          vid: 2016
+          name: steering-vm
+          display: steering-vm (2016)
+          slug: null
+          site: null
+          description: ''
+        - id: 4
+          vid: 2080
+          name: topwind
+          display: topwind (2080)
+          slug: null
+          site: null
+          description: ''
+        - id: 5
+          vid: 2240
+          name: staging-mgmt
+          display: staging-mgmt (2240)
+          slug: null
+          site: null
+          description: Management VLAN between staging-server and staging-switch
+        ip_addresses:
+        - interface: mgmt-vlan
+          interface_id: 13
+          address: 10.2.223.243/29
+          address_no_prefix: 10.2.223.243
+          custom_fields:
+            service_port: null
+          services: []
+        listener_services: []
+        trunk_ports:
+        - name: '1'
+          id: 7
+          mode: tagged
+          description: Trunk port
+          parent: null
+          untagged_vlan: null
+          tagged_vlans:
+          - id: 1
+            vid: 2000
+            name: site-server
+            display: site-server (2000)
+            slug: null
+            site: null
+            description: ''
+          - id: 3
+            vid: 2008
+            name: box-pc
+            display: box-pc (2008)
+            slug: null
+            site: null
+            description: ''
+          - id: 2
+            vid: 2016
+            name: steering-vm
+            display: steering-vm (2016)
+            slug: null
+            site: null
+            description: ''
+          - id: 4
+            vid: 2080
+            name: topwind
+            display: topwind (2080)
+            slug: null
+            site: null
+            description: ''
+          - id: 5
+            vid: 2240
+            name: staging-mgmt
+            display: staging-mgmt (2240)
+            slug: null
+            site: null
+            description: Management VLAN between staging-server and staging-switch
+        management_interfaces:
+        - name: mgmt-vlan
+          id: 13
+          mode: tagged
+          description: Management VLAN 2240
+          parent: '1'
+          untagged_vlan: null
+          tagged_vlans:
+          - id: 5
+            vid: 2240
+            name: staging-mgmt
+            display: staging-mgmt (2240)
+            slug: null
+            site: null
+            description: Management VLAN between staging-server and staging-switch
+        switch_ports:
+        - port: '1'
+          mode: tagged
+          description: Trunk port
+          native_vlan: null
+          tagged_vlans:
+          - 2000
+          - 2008
+          - 2016
+          - 2080
+          - 2240
+        - port: '2'
+          mode: access
+          description: Access VLAN 2000
+          native_vlan: 2000
+          tagged_vlans: []
+        - port: '3'
+          mode: access
+          description: Access VLAN 2008
+          native_vlan: 2008
+          tagged_vlans: []
+        - port: '4'
+          mode: access
+          description: Access VLAN 2016
+          native_vlan: 2016
+          tagged_vlans: []
+        - port: '5'
+          mode: access
+          description: Access VLAN 2080
+          native_vlan: 2080
+          tagged_vlans: []
+  children:
+    device_roles_server:
+      hosts:
+        staging-server: {}
+    sites_local:
+      hosts:
+        staging-server: {}
+        staging-switch: {}
+    status_active:
+      hosts:
+        staging-server: {}
+        staging-switch: {}
+    device_roles_switch:
+      hosts:
+        staging-switch: {}
