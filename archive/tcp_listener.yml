@@ -1,0 +1,311 @@
+---
+# TCP Listener System for NetBox Services
+# Goal: Deploy TCP listeners that dynamically bind to IP:port combinations from NetBox
+#
+# Features:
+#   - Fetches services from NetBox for device ID 1
+#   - Generates config.json from NetBox custom_fields (service_port)
+#   - Deploys Python TCP listener with ThreadingTCPServer
+#   - Creates systemd service for persistence across reboots
+#   - Idempotent: checks running state, removes stale listeners
+#   - Fails loudly on conflicts, logs warnings for invalid data
+
+- name: Deploy TCP Listener System for NetBox Services
+  hosts: localhost
+  connection: local
+  vars:
+    netbox_url: "http://10.100.66.48:8000"
+    netbox_token: "RUmeVgksKcgogMd7tn5TrkIphBEGrQEUKibOmayQ"
+    device_id: 1
+    trunk_interface: "enp1s0"
+    
+    # Directories
+    tcp_listener_dir: "/opt/tcp_listener"
+    config_dir: "/etc/tcp_listener"
+    script_path: "/opt/tcp_listener/tcp_listener.py"
+    config_path: "/etc/tcp_listener/config.json"
+    service_name: "tcp_listener"
+    
+    # Systemd
+    systemd_dir: "/etc/systemd/system"
+    service_file: "/etc/systemd/system/tcp_listener.service"
+    
+    # Initialize to avoid undefined errors
+    running_services: {'services': []}
+    stale_listeners: []
+
+  tasks:
+    # ============================================
+    # 1. Fetch Data from NetBox
+    # ============================================
+
+    - name: Get all interfaces for device from NetBox
+      ansible.builtin.uri:
+        url: "{{ netbox_url }}/api/dcim/interfaces/?device_id={{ device_id }}"
+        method: GET
+        headers:
+          Authorization: "Token {{ netbox_token }}"
+          Accept: "application/json"
+        validate_certs: no
+        return_content: yes
+        status_code: 200
+      register: device_interfaces
+      changed_when: false
+      failed_when: device_interfaces.status != 200
+
+    - name: Find trunk interface
+      ansible.builtin.set_fact:
+        trunk_if: "{{ (device_interfaces.json.results | selectattr('name', 'equalto', trunk_interface) | first) if device_interfaces.json.results else {} }}"
+      failed_when: trunk_if == {}
+
+    - name: Get child interfaces of trunk from NetBox
+      ansible.builtin.uri:
+        url: "{{ netbox_url }}/api/dcim/interfaces/?parent_id={{ trunk_if.id }}"
+        method: GET
+        headers:
+          Authorization: "Token {{ netbox_token }}"
+          Accept: "application/json"
+        validate_certs: no
+        return_content: yes
+        status_code: 200
+      register: child_interfaces
+      changed_when: false
+      failed_when: child_interfaces.status != 200
+
+    # ============================================
+    # 2. Extract Services from NetBox IPs
+    # ============================================
+
+    - name: Fetch all IPs for device from NetBox
+      ansible.builtin.uri:
+        url: "{{ netbox_url }}/api/ipam/ip-addresses/?device_id={{ device_id }}"
+        method: GET
+        headers:
+          Authorization: "Token {{ netbox_token }}"
+          Accept: "application/json"
+        validate_certs: no
+        return_content: yes
+        status_code: 200
+      register: device_ips
+      changed_when: false
+      failed_when: device_ips.status != 200
+
+    - name: Extract services from IPs
+      ansible.builtin.set_fact:
+        netbox_services: "{% set services = [] %}{% for ip_addr in device_ips.json.results %}{% set addr = ip_addr.address.split('/')[0] %}{% set custom_fields = ip_addr.custom_fields | default({}) %}{% if custom_fields and 'service_port' in custom_fields and custom_fields['service_port'] %}{% set service_ports = custom_fields['service_port'].split(',') %}{% for svc in service_ports %}{% set svc = svc.strip() %}{% if '-' in svc %}{% set protocol, port = svc.split('-') %}{% set _ = services.append({'ip': addr, 'port': port | int}) %}{% endif %}{% endfor %}{% endif %}{% endfor %}{{ services | to_json | from_json }}"
+      when: device_ips.json.results is defined
+
+    - name: Display extracted services
+      ansible.builtin.debug:
+        var: netbox_services
+
+    # ============================================
+    # 3. Create Directories
+    # ============================================
+
+    - name: Create TCP listener directory
+      ansible.builtin.file:
+        path: "{{ tcp_listener_dir }}"
+        state: directory
+        mode: '0755'
+        owner: root
+        group: root
+      become: yes
+
+    - name: Create config directory
+      ansible.builtin.file:
+        path: "{{ config_dir }}"
+        state: directory
+        mode: '0755'
+        owner: root
+        group: root
+      become: yes
+
+    # ============================================
+    # 4. Deploy TCP Listener Script
+    # ============================================
+
+    - name: Deploy TCP listener script
+      ansible.builtin.copy:
+        src: "tcp_listener/tcp_listener.py"
+        dest: "{{ script_path }}"
+        mode: '0755'
+        owner: root
+        group: root
+      become: yes
+
+    # ============================================
+    # 5. Generate Configuration from NetBox
+    # ============================================
+
+    - name: Generate TCP listener configuration
+      ansible.builtin.template:
+        src: "tcp_listener/templates/tcp_listener_config.json.j2"
+        dest: "{{ config_path }}"
+        mode: '0644'
+        owner: root
+        group: root
+      vars:
+        services: "{{ netbox_services }}"
+      when: netbox_services | length > 0
+      become: yes
+
+    # ============================================
+    # 6. Create Systemd Service
+    # ============================================
+
+    - name: Deploy systemd service file
+      ansible.builtin.copy:
+        dest: "{{ service_file }}"
+        mode: '0644'
+        owner: root
+        group: root
+        content: |
+          [Unit]
+          Description=TCP Listener Service for NetBox
+          After=network.target
+          Wants=network.target
+          
+          [Service]
+          Type=simple
+          User=root
+          Group=root
+          ExecStart=/usr/bin/python3 {{ script_path }}
+          Restart=on-failure
+          RestartSec=5
+          StandardOutput=journal
+          StandardError=journal
+          SyslogIdentifier=tcp_listener
+          
+          [Install]
+          WantedBy=multi-user.target
+      become: yes
+
+    - name: Reload systemd daemon
+      ansible.builtin.systemd:
+        daemon_reload: yes
+      become: yes
+
+    # ============================================
+    # 7. Check Current Running State
+    # ============================================
+
+    - name: Check if TCP listener service is currently running
+      ansible.builtin.shell: |
+        systemctl is-active tcp_listener.service 2>/dev/null && echo "active" || echo "inactive"
+      register: service_current_state
+      changed_when: false
+      ignore_errors: yes
+
+    - name: Get current config if service is running
+      ansible.builtin.shell: |
+        cat {{ config_path }} 2>/dev/null || echo "{}"
+      register: current_config_file
+      changed_when: false
+      when: service_current_state.stdout == "active"
+
+    - name: Parse current services from config
+      ansible.builtin.set_fact:
+        running_services: >-
+          {% if service_current_state.stdout == "active" and current_config_file.stdout and current_config_file.stdout != "{}" %}
+          {{ current_config_file.stdout | from_json | default({'services': []}) | default({}) }}
+          {% else %}
+          {'services': []}
+          {% endif %}
+      when: service_current_state.stdout == "active"
+
+    # ============================================
+    # 8. Stop Stale Listeners (Idempotency)
+    # ============================================
+
+    - name: Identify stale listeners to remove
+      ansible.builtin.set_fact:
+        stale_listeners: "{% set stale = [] %}{% if running_services and running_services.get('services') %}{% for running in running_services['services'] %}{% set found = false %}{% for desired in netbox_services %}{% if running.ip == desired.ip and running.port == desired.port %}{% set found = true %}{% endif %}{% endfor %}{% if not found %}{% set _ = stale.append(running) %}{% endif %}{% endfor %}{% endif %}{{ stale | to_json | from_json }}"
+
+    - name: Stop stale TCP listeners
+      ansible.builtin.systemd:
+        name: "{{ service_name }}"
+        state: stopped
+      when: stale_listeners | length > 0
+      become: yes
+
+    - name: Wait for stale processes to stop
+      ansible.builtin.pause:
+        seconds: 2
+      when: stale_listeners | length > 0
+
+    # ============================================
+    # 9. Deploy and Start Service
+    # ============================================
+
+    - name: Ensure TCP listener service is enabled and running
+      ansible.builtin.systemd:
+        name: "{{ service_name }}"
+        state: restarted
+        enabled: yes
+        daemon_reload: yes
+      when: netbox_services | length > 0
+      become: yes
+
+    - name: Verify TCP listener service status
+      ansible.builtin.shell: |
+        systemctl is-active {{ service_name }}.service && echo "Running" || echo "Not running"
+      register: service_status
+      changed_when: false
+
+    # ============================================
+    # 10. Test Connectivity (Optional)
+    # ============================================
+
+    - name: Test TCP listener connectivity
+      ansible.builtin.wait_for:
+        host: "{{ item.ip }}"
+        port: "{{ item.port }}"
+        timeout: 5
+      loop: "{{ netbox_services | default([]) }}"
+      loop_control:
+        label: "Testing {{ item.ip }}:{{ item.port }}"
+      when: netbox_services | length > 0
+      ignore_errors: yes
+      register: connectivity_tests
+
+    # ============================================
+    # 11. Summary
+    # ============================================
+
+    - name: Display deployment summary
+      ansible.builtin.debug:
+        msg: |
+          === TCP Listener Deployment Summary ===
+          
+          Device: {{ device_interfaces.json.results[0].device.display | default('Unknown') }}
+          Trunk Interface: {{ trunk_if.name | default('Unknown') }}
+          
+          NetBox Services Found: {{ netbox_services | length }}
+          {% for svc in netbox_services %}
+          - {{ svc.ip }}:{{ svc.port }}
+          {% endfor %}
+          
+          {% if running_services and running_services.get('services') and running_services['services'] | length > 0 %}
+          Previously Running: {{ running_services['services'] | length }}
+          {% for svc in running_services['services'] %}
+          - {{ svc.ip }}:{{ svc.port }}
+          {% endfor %}
+          {% endif %}
+          
+          {% if stale_listeners | length > 0 %}
+          Stale Listeners Removed: {{ stale_listeners | length }}
+          {% for svc in stale_listeners %}
+          - {{ svc.ip }}:{{ svc.port }}
+          {% endfor %}
+          {% endif %}
+          
+          Service Status: {{ service_current_state.stdout | default('Unknown') }}
+          
+          {% if connectivity_tests is defined %}
+          Connectivity Tests: {{ connectivity_tests.results | selectattr('rc', 'equalto', 0) | length }} passed, {{ connectivity_tests.results | selectattr('rc', 'equalto', 1) | list | length }} failed
+          {% endif %}
+          
+          {% if netbox_services | length == 0 %}
+          Note: No services with 'service_port' custom field found in NetBox
+          {% endif %}

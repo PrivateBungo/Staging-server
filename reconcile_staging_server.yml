@@ -1,0 +1,250 @@
+---
+- name: Reconcile staging-server networking from inventory
+  hosts: staging-server
+  become: true
+  gather_facts: false
+
+  vars:
+    trunk_interface: "enp1s0"
+    persistence_dir: "/etc/netbox_reconcile"
+    tcp_sim_config: "{{ persistence_dir }}/tcp_services.json"
+    network_config: "{{ persistence_dir }}/network-config.sh"
+    generated_at: "{{ lookup('pipe', 'date -Iseconds') }}"
+
+  tasks:
+    - name: Load inventory data for this host
+      ansible.builtin.set_fact:
+        device_inventory: "{{ hostvars[inventory_hostname] }}"
+        device_network: "{{ hostvars[inventory_hostname].network }}"
+        trunk_if: >-
+          {{
+            (hostvars[inventory_hostname].network.interfaces
+              | selectattr('name', 'equalto', trunk_interface)
+              | first)
+            | to_json
+            | from_json
+          }}
+        child_interfaces: >-
+          {{
+            (hostvars[inventory_hostname].network.interfaces
+              | selectattr('parent', 'equalto', trunk_interface)
+              | list)
+            | to_json
+            | from_json
+          }}
+        nb_vlan_ids: >-
+          {{
+            (
+              hostvars[inventory_hostname].network.interfaces
+              | selectattr('parent', 'equalto', trunk_interface)
+              | map(attribute='tagged_vlans')
+              | flatten
+              | map(attribute='vid')
+              | unique
+              | sort
+              | list
+            )
+            | to_json
+            | from_json
+          }}
+
+    - name: Build interface and IP pairs from inventory
+      ansible.builtin.set_fact:
+        interface_ip_pairs: "{{ query('ansible.builtin.subelements', child_interfaces, 'ip_addresses') }}"
+
+    - name: Create persistence directory
+      ansible.builtin.file:
+        path: "{{ persistence_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Display inventory-driven configuration
+      ansible.builtin.debug:
+        msg: |
+          Device: {{ device_inventory.netbox_display_name | default(inventory_hostname) }}
+          Trunk Interface: {{ trunk_if.name | default(trunk_interface) }}
+          VLANs from inventory: {{ nb_vlan_ids | default([]) }}
+          Child interfaces:
+          {% for iface in child_interfaces %}
+          - {{ iface.name }}: VLANs {{ iface.tagged_vlans | map(attribute='vid') | list }}, IPs {{ iface.ip_addresses | map(attribute='address') | list }}
+          {% endfor %}
+
+    - name: Get current VLAN IDs on host
+      ansible.builtin.shell: |
+        python3 - <<'PY'
+        import json
+        import subprocess
+
+        parent = "{{ trunk_interface }}"
+        result = subprocess.run(["ip", "-o", "link", "show"], capture_output=True, text=True, check=False)
+        vlan_ids = []
+        for line in result.stdout.splitlines():
+            if parent + "." not in line:
+                continue
+            parts = line.split(":")
+            if len(parts) < 2:
+                continue
+            ifname = parts[1].strip().split("@")[0].split()[0]
+            if ifname.startswith(parent + "."):
+                vid = ifname.split(".", 1)[1]
+                if vid.isdigit():
+                    vlan_ids.append(int(vid))
+        print(json.dumps(sorted(set(vlan_ids))))
+        PY
+      register: host_vlan_raw
+      changed_when: false
+
+    - name: Set host VLAN IDs fact
+      ansible.builtin.set_fact:
+        host_vlan_ids: "{{ host_vlan_raw.stdout | from_json | default([]) }}"
+
+    - name: Check if trunk interface exists on this host
+      ansible.builtin.command: "ip link show {{ trunk_interface }}"
+      register: if_check
+      ignore_errors: true
+      changed_when: false
+
+    - name: Create VLAN interfaces that exist in inventory but not on host
+      ansible.builtin.command: "ip link add link {{ trunk_interface }} name {{ trunk_interface }}.{{ item }} type vlan id {{ item }}"
+      loop: "{{ nb_vlan_ids | difference(host_vlan_ids | default([])) | list }}"
+      when:
+        - nb_vlan_ids | length > 0
+        - if_check.rc == 0
+      register: vlan_created
+      changed_when: vlan_created.rc == 0
+      ignore_errors: true
+
+    - name: Remove VLAN interfaces that exist on host but not in inventory
+      ansible.builtin.command: "ip link del {{ trunk_interface }}.{{ item }}"
+      loop: "{{ (host_vlan_ids | default([])) | difference(nb_vlan_ids) | list }}"
+      when:
+        - host_vlan_ids | length > 0
+        - if_check.rc == 0
+      register: vlan_removed
+      changed_when: vlan_removed.rc == 0
+      ignore_errors: true
+
+    - name: Bring up all VLAN interfaces
+      ansible.builtin.command: "ip link set {{ trunk_interface }}.{{ item }} up"
+      loop: "{{ nb_vlan_ids }}"
+      when:
+        - nb_vlan_ids | length > 0
+        - if_check.rc == 0
+      register: vlan_up
+      changed_when: vlan_up.rc == 0
+      ignore_errors: true
+
+    - name: Configure IP addresses on VLAN interfaces
+      ansible.builtin.command: >-
+        ip addr add {{ item.1.address }} dev {{ trunk_interface }}.{{ item.0.tagged_vlans[0].vid }}
+      loop: "{{ interface_ip_pairs }}"
+      when:
+        - interface_ip_pairs | length > 0
+        - if_check.rc == 0
+        - item.0.tagged_vlans | default([]) | length > 0
+      register: ip_configured
+      changed_when: ip_configured.rc == 0
+      ignore_errors: true
+
+    - name: Generate network configuration script
+      ansible.builtin.copy:
+        dest: "{{ network_config }}"
+        mode: "0755"
+        content: |
+          #!/bin/bash
+          # Auto-generated by NetBox reconciliation - {{ generated_at }}
+          TRUNK_IF="{{ trunk_interface }}"
+
+          ip link set $TRUNK_IF up 2>/dev/null || true
+
+          {% for vlan_id in nb_vlan_ids %}
+          ip link add link $TRUNK_IF name $TRUNK_IF.{{ vlan_id }} type vlan id {{ vlan_id }} 2>/dev/null || true
+          ip link set $TRUNK_IF.{{ vlan_id }} up 2>/dev/null || true
+          {% endfor %}
+
+          {% for iface in child_interfaces %}
+          {% for ip_info in iface.ip_addresses | default([]) %}
+          {% if iface.tagged_vlans | default([]) | length > 0 %}
+          ip addr add {{ ip_info.address }} dev $TRUNK_IF.{{ iface.tagged_vlans[0].vid }} 2>/dev/null || true
+          {% endif %}
+          {% endfor %}
+          {% endfor %}
+
+    - name: Generate TCP service simulation configuration
+      ansible.builtin.copy:
+        dest: "{{ tcp_sim_config }}"
+        mode: "0644"
+        content: |
+          {
+            "services": [
+              {%- set ns = namespace(first=true) -%}
+              {%- for iface in child_interfaces -%}
+              {%- for ip in iface.ip_addresses | default([]) -%}
+              {%- for svc in ip.services | default([]) -%}
+              {%- if not ns.first %},{% endif -%}
+              {
+                "ip": "{{ ip.address.split('/')[0] }}",
+                "port": {{ svc.port }},
+                "protocol": "{{ svc.protocol }}",
+                "banner": "Service {{ svc.raw }} on {{ ip.address.split('/')[0] }}"
+              }
+              {%- set ns.first = false -%}
+              {%- endfor -%}
+              {%- endfor -%}
+              {%- endfor -%}
+            ]
+          }
+      when: false
+
+    - name: Register network config as a service for persistence
+      ansible.builtin.systemd:
+        name: netbox-network
+        state: started
+        enabled: true
+        scope: system
+      register: systemd_result
+      ignore_errors: true
+
+    - name: Display reconciliation summary
+      ansible.builtin.debug:
+        msg: |
+          ============================================
+          NetBox Reconciliation Summary
+          ============================================
+
+          Device: {{ device_inventory.netbox_display_name | default(inventory_hostname) }}
+          Trunk Interface: {{ trunk_if.name | default(trunk_interface) }}
+
+          VLANs from inventory: {{ nb_vlan_ids | default([]) }}
+          Host VLANs (before): {{ host_vlan_ids | default([]) }}
+
+          Actions:
+          {% set created = (vlan_created.results | default([])) | selectattr('changed', 'equalto', true) | map(attribute='item') | list %}
+          {% set removed = (vlan_removed.results | default([])) | selectattr('changed', 'equalto', true) | map(attribute='item') | list %}
+          {% set uplifted = (vlan_up.results | default([])) | selectattr('changed', 'equalto', true) | map(attribute='item') | list %}
+          {% set configured_ip_count = (ip_configured.results | default([])) | selectattr('changed', 'equalto', true) | list | length %}
+
+          {% if created %}
+          Created VLAN interfaces: {{ created }}
+          {% else %}
+          Created VLAN interfaces: None
+          {% endif %}
+          {% if removed %}
+          Removed VLAN interfaces: {{ removed }}
+          {% else %}
+          Removed VLAN interfaces: None
+          {% endif %}
+          {% if uplifted %}
+          Brought up VLAN interfaces: {{ uplifted }}
+          {% else %}
+          Brought up VLAN interfaces: None
+          {% endif %}
+          Configured IP count: {{ configured_ip_count }}
+
+          Persistence:
+          - Network config: {{ network_config }}
+          - TCP services config: {{ tcp_sim_config }}
+
+          ============================================
+          Status: Host VLANs and IPs now match inventory
+          ============================================

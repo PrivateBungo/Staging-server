@@ -1,0 +1,28 @@
+---
+- name: Snapshot NetBox inventory
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    inventory_output_file: "{{ playbook_dir }}/inventory.yml"
+    inventory_snapshot_script: "{{ playbook_dir }}/build_netbox_inventory.py"
+
+  tasks:
+    - name: Fetch enriched inventory data from NetBox
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ inventory_snapshot_script }}"
+      register: inventory_snapshot_raw
+      changed_when: false
+
+    - name: Parse enriched inventory JSON
+      ansible.builtin.set_fact:
+        netbox_inventory_data: "{{ inventory_snapshot_raw.stdout | from_json }}"
+
+    - name: Render inventory snapshot
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/inventory_template.j2"
+        dest: "{{ inventory_output_file }}"
+      vars:
+        inventory_data: "{{ netbox_inventory_data }}"

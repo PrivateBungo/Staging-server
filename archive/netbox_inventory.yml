@@ -1,0 +1,35 @@
+---
+plugin: netbox.netbox.nb_inventory
+api_endpoint: http://10.100.66.48:8000
+token: RUmeVgksKcgogMd7tn5TrkIphBEGrQEUKibOmayQ
+validate_certs: false
+config_context: true
+group_by:
+  - device_roles
+  - sites
+  - status
+compose:
+  netbox_id: id
+  netbox_name: name
+  netbox_display_name: display_name
+  netbox_description: description
+  netbox_status: status.value
+  netbox_device_type: device_type.model
+  netbox_device_type_slug: device_type.slug
+  netbox_device_role: device_role.name
+  netbox_device_role_slug: device_role.slug
+  netbox_manufacturer: device_type.manufacturer.name if device_type and device_type.manufacturer else None
+  netbox_site: site.name if site else None
+  netbox_site_slug: site.slug if site else None
+  netbox_location: location.name if location else None
+  netbox_rack: rack.name if rack else None
+  netbox_platform: platform.slug if platform else None
+  netbox_tenant: tenant.name if tenant else None
+  netbox_primary_ip: primary_ip.address if primary_ip else None
+  netbox_primary_ip4: primary_ip4.address if primary_ip4 else None
+  netbox_primary_ip6: primary_ip6.address if primary_ip6 else None
+  netbox_serial: serial
+  netbox_asset_tag: asset_tag
+  netbox_custom_fields: custom_fields
+  netbox_tags: tags
+  netbox_config_context: config_context

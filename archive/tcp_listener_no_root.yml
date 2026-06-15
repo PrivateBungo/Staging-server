@@ -1,0 +1,176 @@
+---
+# TCP Listener System for NetBox Services (No Root Version)
+# This version generates all files in user space and prints root commands
+
+- name: Deploy TCP Listener System for NetBox Services
+  hosts: localhost
+  connection: local
+  vars:
+    netbox_url: "http://10.100.66.48:8000"
+    netbox_token: "RUmeVgksKcgogMd7tn5TrkIphBEGrQEUKibOmayQ"
+    device_id: 1
+    
+    # Directories
+    tcp_listener_dir: "/opt/tcp_listener"
+    config_dir: "/etc/tcp_listener"
+    script_path: "/opt/tcp_listener/tcp_listener.py"
+    config_path: "/etc/tcp_listener/config.json"
+    service_name: "tcp_listener"
+    service_file: "/etc/systemd/system/tcp_listener.service"
+
+  tasks:
+    # ============================================
+    # 1. Fetch Data from NetBox
+    # ============================================
+
+    - name: Get all interfaces for device from NetBox
+      ansible.builtin.uri:
+        url: "{{ netbox_url }}/api/dcim/interfaces/?device_id={{ device_id }}"
+        method: GET
+        headers:
+          Authorization: "Token {{ netbox_token }}"
+          Accept: "application/json"
+        validate_certs: no
+        return_content: yes
+        status_code: 200
+      register: device_interfaces
+      changed_when: false
+      failed_when: device_interfaces.status != 200
+
+    - name: Find trunk interface
+      ansible.builtin.set_fact:
+        trunk_if: "{{ (device_interfaces.json.results | selectattr('name', 'equalto', 'enp1s0') | first) if device_interfaces.json.results else {} }}"
+      failed_when: trunk_if == {}
+
+    - name: Fetch all IPs for device from NetBox
+      ansible.builtin.uri:
+        url: "{{ netbox_url }}/api/ipam/ip-addresses/?device_id={{ device_id }}"
+        method: GET
+        headers:
+          Authorization: "Token {{ netbox_token }}"
+          Accept: "application/json"
+        validate_certs: no
+        return_content: yes
+        status_code: 200
+      register: device_ips
+      changed_when: false
+      failed_when: device_ips.status != 200
+
+    - name: Extract services from IPs
+      ansible.builtin.set_fact:
+        netbox_services: "{% set services = [] %}{% for ip_addr in device_ips.json.results %}{% set addr = ip_addr.address.split('/')[0] %}{% set custom_fields = ip_addr.custom_fields | default({}) %}{% if custom_fields and 'service_port' in custom_fields and custom_fields['service_port'] %}{% set service_ports = custom_fields['service_port'].split(',') %}{% for svc in service_ports %}{% set svc = svc.strip() %}{% if '-' in svc %}{% set protocol, port = svc.split('-') %}{% set _ = services.append({'ip': addr, 'port': port | int}) %}{% endif %}{% endfor %}{% endif %}{% endfor %}{{ services | to_json | from_json }}"
+      when: device_ips.json.results is defined
+
+    - name: Display extracted services
+      ansible.builtin.debug:
+        var: netbox_services
+
+    # ============================================
+    # 2. Create user-space directories
+    # ============================================
+
+    - name: Create TCP listener directory in user space
+      ansible.builtin.file:
+        path: "{{ ansible_env.HOME }}/tcp_listener"
+        state: directory
+        mode: '0755'
+
+    - name: Create config directory in user space
+      ansible.builtin.file:
+        path: "{{ ansible_env.HOME }}/tcp_listener_config"
+        state: directory
+        mode: '0755'
+
+    # ============================================
+    # 3. Deploy TCP Listener Script to user space
+    # ============================================
+
+    - name: Deploy TCP listener script to user space
+      ansible.builtin.copy:
+        src: "tcp_listener/tcp_listener.py"
+        dest: "{{ ansible_env.HOME }}/tcp_listener/tcp_listener.py"
+        mode: '0755'
+
+    # ============================================
+    # 4. Generate Configuration to user space
+    # ============================================
+
+    - name: Generate TCP listener configuration to user space
+      ansible.builtin.template:
+        src: "tcp_listener/templates/tcp_listener_config.json.j2"
+        dest: "{{ ansible_env.HOME }}/tcp_listener_config/config.json"
+        mode: '0644'
+      vars:
+        services: "{{ netbox_services }}"
+      when: netbox_services | length > 0
+
+    # ============================================
+    # 5. Display commands to run as root
+    # ============================================
+
+    - name: Display root commands to deploy
+      ansible.builtin.debug:
+        msg: |
+          ============================================================
+          RUN THESE COMMANDS AS ROOT TO COMPLETE DEPLOYMENT:
+          ============================================================
+          
+          # 1. Create directories:
+          sudo mkdir -p {{ tcp_listener_dir }} {{ config_dir }}
+          
+          # 2. Copy files:
+          sudo cp -r {{ ansible_env.HOME }}/tcp_listener/* {{ tcp_listener_dir }}/
+          sudo cp {{ ansible_env.HOME }}/tcp_listener_config/config.json {{ config_path }}
+          
+          # 3. Create systemd service:
+          sudo bash -c 'cat > {{ service_file }} << "SERVICE"
+          [Unit]
+          Description=TCP Listener Service for NetBox
+          After=network.target
+          Wants=network.target
+          
+          [Service]
+          Type=simple
+          User=root
+          Group=root
+          ExecStart=/usr/bin/python3 {{ script_path }}
+          Restart=on-failure
+          RestartSec=5
+          StandardOutput=journal
+          StandardError=journal
+          SyslogIdentifier=tcp_listener
+          
+          [Install]
+          WantedBy=multi-user.target
+          SERVICE'
+          
+          # 4. Reload systemd and start service:
+          sudo systemctl daemon-reload
+          sudo systemctl enable tcp_listener.service
+          sudo systemctl restart tcp_listener.service
+          
+          # 5. Verify:
+          sudo systemctl status tcp_listener.service
+          journalctl -u tcp_listener.service -f
+          
+          ============================================================
+      when: netbox_services | length > 0
+
+    # ============================================
+    # 6. Summary
+    # ============================================
+
+    - name: Display deployment summary
+      ansible.builtin.debug:
+        msg: |
+          === TCP Listener Deployment Summary ===
+          
+          NetBox Services Found: {{ netbox_services | length }}
+          {% for svc in netbox_services %}
+          - {{ svc.ip }}:{{ svc.port }}
+          {% endfor %}
+          
+          Files created in: {{ ansible_env.HOME }}/tcp_listener/
+          Config created in: {{ ansible_env.HOME }}/tcp_listener_config/
+          
+          Run the commands displayed above as root to complete deployment.
